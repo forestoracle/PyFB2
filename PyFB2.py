@@ -1,4 +1,8 @@
-﻿import argparse
+﻿"""
+ Версия: 2022-01-31
+
+"""
+import argparse
 import base64
 import hashlib
 import os
