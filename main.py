@@ -1,88 +1,181 @@
-import xml.etree.ElementTree as ET
-from xml.etree.ElementTree import Element
-from PyFB2 import FB2Parser, FB2HTML, FB2Renamer, FB2GroupRenamer
-import colored
-# from bs4 import BeautifulSoup
+﻿import argparse
+import sqlite3
+from pathlib import Path
 
-# import clargs
-level = 1
+from colored import fg, attr
+
+from PyFB2 import FB2Hyst, FB2GroupRenamer, FB2HTML, FB2Parser
+
+_prog = "Hyst FB2 tools"
+_version = "0.9"
+_epilog = """
+          Программа для разбора FB2
+          """
+
+argparser = argparse.ArgumentParser(prog=_prog, description='Tools for FB2', epilog=_epilog)
+
+argparser.add_argument('--action', help="Действие, которое необходимо выполнить." \
+                                        "html - преобразовать файл FB2 в HTML\n" \
+                                        "hyst - преобразовать файл FB2 в Hyst ",
+                       choices=['edit', 'html', 'grouphtml', 'hyst', 'epub', 'rename', 'grouprename'], required=True,
+                       dest='action')
+
+argparser.add_argument('-v', '--version', help='показать версию и выйти', action='version',
+                       version='{0} {1}'.format(_prog, _version))
+group_src = argparser.add_mutually_exclusive_group()
+group_dst = argparser.add_mutually_exclusive_group()
+
+group_src.add_argument('--file', type=str, default=None, help="FB2 файл", action='store', dest='filename')
+
+group_src.add_argument('--indir', type=str, default=None, help="Входной каталог с файлами FB2", action='store',
+                       dest='indir')
+
+group_dst.add_argument('--outdir', type=str, default=None, help="Каталог для записи результатов работы", action='store',
+                       dest='outdir')
+
+group_dst.add_argument('--hystdb', type=str, default=None, help='База данных Hyst', action='store', dest='hystdb')
+
+argparser.add_argument('--debug', help='показывать отладочные сообщения', default=False, action='store_true',
+                       dest='debug')
 
 
-def print_titles(root):
-    global level
-    secs = fb2.get_sections(root)
-    sec: Element
-    for sec in secs:
-        titles = fb2.get_titles(sec)
-        txt = ""
-        for title in titles:
-            txt += title.text
-        print("    " * level, txt)
-        #for elem in sec.findall("section"):
-        #    elem.tag = "body"
-        for elem in sec.findall("./title"):
-            elem.tag = "h" + str(level)
+argparser.add_argument('--template', help='Шаблон для переименования', default=None, action='store',
+                       dest='rename_template')
 
-        html = ET.Element('html', attrib={"xml:lang":"ru-ru", "lang":"ru-ru"})
+argparser.add_argument('--subaction', choices=['createdb', 'addbook', 'addnotebook', 'addnode', 'shownodes'],
+                       help='Subaction', required=False, dest='subaction')
 
-        head = ET.Element('head')
-        ET.SubElement(head, 'meta', attrib={"http-equiv":"content-type" ,"content": "text/html; charset=utf-8"})
-        ET.SubElement(head, 'title').text = txt
-
-        body = ET.Element('body')
-        html.append(head)
-        html.append(body)
-        body.append(sec)
-        book = ET.ElementTree(html)
-        book.write("./out/" + txt + ".html", encoding='utf-8')
-        level += 1
-        print_titles(sec)
-        level -= 1
+args = argparser.parse_args()
 
 
-if __name__ == '__main__':  #
-    cl_fg = colored.fore
-    cl_bg = colored.back
-    cl_info = colored.fg(2)
-    cl_error = colored.fg(1)
-    level = 1
-    fb2 = FB2Parser("C:\projects\dev\python\pyFB2\sample\lenin.fb2")
-    if fb2.LastError == 0:
-        print(cl_info, 'File opened.')
-    else:
-        print(cl_error, 'File not found!')
-        exit(fb2.LastError)
-    print("      Title: ", fb2.title)
-    print("       Lang: ", fb2.lang)
-    print("Source Lang: ", fb2.src_lang)
-    print("      Genre: ", fb2.genre)
-    print(" Annotation: ", fb2.annotation)
-    print("   Keywords: ", fb2.keywords)
-    print("   Sequence: ", fb2.sequence_name)
-    print(" Sequence #: ", fb2.sequence_number)
-    print("       Date: ", fb2.title_info_date)
-    authors = fb2.authors
-    print("Author(s): ", fb2.authors)
-    for author in authors:
-        print(colored.fg("yellow"),"  First name: ", colored.fg("black"), fb2.author_first_name(author))
-        print(colored.fg("yellow"),"   Last name: ", colored.fg("black"), fb2.author_last_name(author))
-        print(colored.fg(200),"Middle name: ", colored.fg("black"), fb2.author_middle_name(author))
-        print(colored.fg("yellow"),"   Home page: ", colored.fg("black"), fb2.author_home_page(author))
-        print(colored.fg("yellow"),"    Nickname: ", colored.fg("black"), fb2.author_nickname(author))
-        print(colored.fg("yellow"),"          ID: ", colored.fg("black"), fb2.author_id(author))
-        print(colored.fg("yellow")," ------------")
+#
+# --== CHECKS ==--
+#
+def check_file():
+    if (args.filename) is None:
+        print('{0}Не указано имя файла FB2. Используйте аргумент --file{1}'.format(fg(1), attr(0)))
+        exit(101)
 
-    # print("    Binaries:", fb2.write_binaries())
-    fb2html = FB2HTML("C:\projects\dev\python\pyFB2\sample\lenin.fb2")
-    fb2html.write_html('out')
-    bodies = fb2.bodies
-    print(" Bodies:", fb2.bodies)
 
-    ren = FB2GroupRenamer("c:/temp/fb2", "{Al} {Af} - {Tt}")
-    ren.rename_all()
-    # ren.rename()
-    # for body in bodies:
-    #     print_titles(body)
-    # for cl in range(250):
-    #    print(colored.fg(cl), "test", cl)
+def check_file_exists():
+    if not os.path.isfile(args.filename):
+        print('{0}Указан несуществующий входной файл {1}{2} '.format(fg(1), args.filename, attr(0)))
+        exit(105)
+
+
+
+
+def check_outdir():
+    if args.outdir is None:
+        print('{0}Не указан выходной каталог. Используйте аргумент --outdir{1}'.format(fg(1), attr(0)))
+        exit(106)
+
+
+def check_tmpl():
+    if args.rename_template is None:
+        print('{0}Не указан шаблон для переименования {1}'.format(fg(1), attr(0)))
+        exit(104)
+
+
+def check_hystdb():
+    if args.hystdb is None:
+        print('{0}Не указана база Hyst {1}'.format(fg(1), attr(0)))
+        exit(110)
+
+
+#
+#  --== ACTIONS ==--
+#
+#
+# -=  Edit =-
+#
+if args.action == 'edit':
+    print('{0}Действие:{1} EDIT{2}'.format(fg(4), fg(2), attr(0)))
+    check_file()
+    exit(0)
+
+#
+# -= HTML =-
+#
+if args.action == 'html':
+    print('{0}Действие:{1} HTML{2}'.format(fg(4), fg(2), attr(0)))
+    check_file()
+    check_file_exists()
+    check_outdir()
+    html = FB2HTML(filename=args.filename, debug=args.debug)
+    html.create_html(outdir=args.outdir)
+    exit(0)
+
+#
+# -= Group HTML =-
+#
+if args.action == 'grouphtml':
+    check_outdir()
+    check_indir_exists()
+    for item in list(Path(args.indir).glob('**/*.fb2')):
+        try:
+            html = FB2HTML(filename=item, debug=False)
+            html.create_html(outdir=args.outdir)
+        except:
+            print('Ошибка: {0}'.format(item))
+    exit(0)
+
+#
+# -=  Group Rename =-
+#
+if args.action == 'grouprename':
+    print('{0}Действие:{1} GROUPRENAME{2}'.format(fg(4), fg(2), attr(0)))
+    check_indir_exists()
+    check_tmpl()
+    print('          Входной каталог: {0}'.format(args.indir))
+    print('Шаблон для переименования: {0}\n'.format(args.rename_template))
+    ren = FB2GroupRenamer(start_dir=args.indir, outdir=args.outdir, template=args.rename_template, debug=args.debug)
+    # Проверим, что объект создался и готов к работе
+    if ren is None:
+        exit(201)
+    counter = ren.rename_all()
+    print('\n     Переименовано файлов: {0}'.format(counter))
+    exit(0)
+
+#
+# -=  Hyst =-
+#
+if args.action == 'hyst':
+    print('{0}Действие:{1} HYST{2}'.format(fg(4), fg(2), attr(0)))
+    check_file()
+    check_file_exists()
+    check_hystdb()
+    hyst = FB2Hyst(database=args.hystdb, debug=args.debug)
+    if hyst is None:
+        print('{0}Ошибка создания/открытия БД {0}'.format(fg(4), args.hystdb, attr(0)))
+        exit(202)
+    if args.subaction == 'createdb':
+        print('{0}  Создана БД: {1}{2}{3}'.format(fg(4), fg(2), args.hystdb, attr(0)))
+        exit(0)
+    if args.subaction == 'addnotebook':
+        """
+        :TODO: В add_notebook нужно заменить литералы на параметры
+        """
+        notebook_id = hyst.add_notebook(notebook_name='Notebook', short_descr='New notebook')
+        memconn = sqlite3.connect(':memory:')
+        memconn.execute('create table books (ln varchar2(100), fn varchar2(100), mn varchar2(100), book varchar2(1024), filename varchar2(4096))')
+        cursor = memconn.cursor()
+        sql = 'insert into books (ln, fn, mn, book, filename) values (?, ?, ?, ?, ?)'
+        for item in list(Path('./sample/vm').glob('**/*.fb2')):
+            p = FB2Parser(filename=item)
+            cursor.execute(sql, [p.author_last_name(), p.author_first_name(), p.author_middle_name(), p.title, str(item)])
+            memconn.commit()
+
+        sql = 'select filename from books order by ln, fn, mn, book'
+        for row in cursor.execute(sql):
+            try:
+                print('Файл: {0}'.format(row[0]))
+                hyst.add_book_ext(filename=row[0], notebook_id=notebook_id)
+            except:
+                print('{0}Ошибка:{1} {2}'.format(fg(1), attr(0), row[0]))
+
+        cursor.close()
+        memconn.close()
+        exit(0)
+    exit(0)
 
