@@ -1,3 +1,7 @@
+"""
+Версия 2022-01-31
+
+"""
 import argparse
 import os
 import sqlite3
