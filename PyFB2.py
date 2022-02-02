@@ -1266,7 +1266,7 @@ class FB2Renamer:
     :param debug: выводить отладочные сообщения
     """
 
-    def __init__(self, filename: str, template: str, outdir: str = '', debug = False) -> object:
+    def __init__(self, filename: str, template: str, outdir: str = '', debug: bool = False) -> object:
         """
         Конструктор класса для переименования файла FB2 по шаблону
 
@@ -1279,9 +1279,9 @@ class FB2Renamer:
         self._get_fb2_properties()  # получить свойства FB2-файла
         self.outdir = self._process_template(outdir)  #
         self.newPath = os.path.join(os.path.split(os.path.abspath(filename))[0], self.outdir)
-        self.newFileName = '{0}.fb2'.format( self._process_template(template))
+        self.newFileName = '{0}.fb2'.format(self._process_template(template))
 
-    def rename(self, dest_dir = '') -> str:
+    def rename(self, dest_dir: str = '') -> str:
         """
         Выполняет переименование файла
         """
@@ -1307,8 +1307,8 @@ class FB2Renamer:
         if parser is None:
             print('FB2Renamer error: bad file. File: {0}'.format(self.old_filename))
             return
-        self.S = parser.sequence_name
-        self.SN = parser.sequence_number
+        self.S = parser.sequence_name.strip()
+        self.SN = parser.sequence_number.strip()
         self.Tt = parser.title.strip()
         self.T = self.Tt.upper().strip()
         self.t = self.Tt.lower().strip()
@@ -1353,7 +1353,7 @@ class FB2Renamer:
             break
         del parser
 
-    def _remove_restricted_chars(self, value) -> str:
+    def _remove_restricted_chars(self, value: str) -> str:
         """
         Удаляет из строки символы, запрещенные для использования в именах файлов
         :param value: Строка, из которой нужно удалить запрещенные символы
@@ -1362,13 +1362,6 @@ class FB2Renamer:
         for c in '\/:*?"<>|':
             value = value.replace(c, '')
         return value
-
-    def _template_is_valid(self) -> bool:
-        """
-        Проверяет, что шаблон переименования правильный
-        :return:
-        """
-        return True
 
     def _process_template(self, template: str) -> str:
         nn = template
@@ -1403,7 +1396,7 @@ class FB2GroupRenamer:
     Групповое переименование FB2 файлов
     """
 
-    def __init__(self, startdir: str, outdir: str, template: str, debug = False):
+    def __init__(self, startdir: str, outdir: str, template: str, debug: bool = False):
         """
         Конструктор
         :param startdir: Каталог, в котором нужно искать файлы FB2
