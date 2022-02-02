@@ -1257,6 +1257,8 @@ class FB2Renamer:
     {T}  - заголовок - верхний регистр
     {t}  - заголовок - нижний регистр
     {Tt} - заголовок - как в файле
+    {S}  - серия (sequence)
+    {SN} - номер в серии (sequence number)
 
     :param filename: Имя файла, который будет переименован
     :param template: Шаблон переименования
@@ -1305,6 +1307,8 @@ class FB2Renamer:
         if parser is None:
             print('FB2Renamer error: bad file. File: {0}'.format(self.old_filename))
             return
+        self.S = parser.sequence_name
+        self.SN = parser.sequence_number
         self.Tt = parser.title.strip()
         self.T = self.Tt.upper().strip()
         self.t = self.Tt.lower().strip()
@@ -1368,6 +1372,8 @@ class FB2Renamer:
 
     def _process_template(self, template: str) -> str:
         nn = template
+        nn = nn.replace('{S}', self.S)
+        nn = nn.replace('{SN}', self.SN)
         nn = nn.replace('{AM}', self.AM)
         nn = nn.replace('{AF}', self.AF)
         nn = nn.replace('{AL}', self.AL)

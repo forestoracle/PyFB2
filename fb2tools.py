@@ -94,13 +94,13 @@ description = 'Программа используется для следующ
               ' - переименование FB2 файлов;\n' \
               ' - групповое переименование FB2 файлов;'
 
-prog_name = "fb2tools.py"
+progname = "fb2tools.py"
 version = "0.9"
 epilog = """
           Программа для разбора FB2
           """
 
-parser = argparse.ArgumentParser(prog = prog_name, description = description, epilog = epilog)
+parser = argparse.ArgumentParser(prog = progname, description = description, epilog = epilog)
 parser.add_argument('--debug', help = 'Показывать отладочные сообщения', default = False, action = 'store_true',
                     dest = 'debug')
 
