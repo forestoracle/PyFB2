@@ -1,5 +1,5 @@
-echo off
+﻿echo off
 .\venv\Scripts\python.exe fb2tools.py --debug grouprename ^
-  --indir="C:\temp\books\corpus"  ^
-  --outdir="{Al} {Af} {Am}" ^
+  --indir=%1    ^
+  --outdir="" ^
   --template="{Al} {Af} {Am} - {Tt}" 

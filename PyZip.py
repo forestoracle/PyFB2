@@ -1,21 +1,30 @@
-import zlib
+import os
+import zipfile
 
 
 class ZipFB2:
-    pass
+    def zip(self, filename: str):
+        pass
 
 
 class UnzipFB2:
-    def unzip_file(self, filename: str):
-        unpack = zlib.decompressobj()
-        with open(filename, 'rb') as fpr, open('unpack-sample.txt', 'wb') as fpw:
-            while True:
-                # читаем частями по 32 байта
-                block = fpr.read(32)
-                if block:
-                    # распаковываем
-                    data = unpack.decompress(block)
-                    # пишем данные ф текстовый файл
-                    fpw.write(data)
-                else:
-                    break
+    def __init__(self, startdir: str = '.', removezip: bool = False, debug: bool = False) -> object:
+        self.startDir = startdir
+        self.removezip = removezip
+        self.debug = debug
+
+    def unzipFile(self, filename: str):
+        path = os.path.split(os.path.abspath(filename))[0]  # получить полный путь к файлу
+        unzip = zipfile.ZipFile(filename)
+        unzip.extractall(path = path)  # извлечь все файлы из архива
+        unzip.close()
+        if self.removezip:
+            os.unlink(filename)  # удаление файла ZIP
+
+    def unzipAll(self):
+        for folderName, subfolders, filenames in os.walk(self.startDir):
+            for filename in filenames:
+                filename = os.path.join(folderName, filename)
+                if zipfile.is_zipfile(filename):
+                    print('  Unzip: {}'.format(filename))
+                    self.unzipFile(filename = filename)

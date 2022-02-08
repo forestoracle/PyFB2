@@ -7,6 +7,7 @@ import os
 import sqlite3
 
 from PyFB2 import FB2GroupRenamer, FB2HTML, FB2Renamer
+from PyZip import UnzipFB2
 
 
 #
@@ -98,6 +99,15 @@ def do_html(args: argparse.Namespace):
     html.create_html(args.outdir)
 
 
+def do_zip(args: argparse.Namespace):
+    pass
+
+
+def do_unzip(args: argparse.Namespace):
+    unzip = UnzipFB2(args.indir, args.removezip)
+    unzip.unzipAll()
+
+
 #
 #  Создание парсеров аргументов командной строки
 #
@@ -171,6 +181,24 @@ parser_html.add_argument('--file', type = str, default = None, help = 'FB2 фа�
 parser_html.add_argument('--outdir', type = str, default = None, help = 'Каталог для записи результатов работы',
                          action = 'store',
                          dest = 'outdir')
+
+#
+#  Zip parser
+#
+parser_zip = subparsers.add_parser('zip', help = 'Сжатие FB2 файлов')
+parser_zip.set_defaults(func = do_zip)
+
+#
+#  UnZip parser
+#
+parser_unzip = subparsers.add_parser('unzip', help = 'Сжатие FB2 файлов')
+parser_unzip.set_defaults(func = do_unzip)
+parser_unzip.add_argument('--indir', type = str, default = None, help = 'Входной каталог с файлами FB2',
+                          action = 'store',
+                          dest = 'indir')
+parser_unzip.add_argument('--removezip', default = False, help = 'Удалять архив после распаковки',
+                          action = 'store_true',
+                          dest = 'removezip')
 
 #
 #  Разбор командной строки и вызов обработчика

@@ -1232,9 +1232,10 @@ class FB2DirScaner:
                      FROM authors 
                     ORDER BY last_name, first_name, middle_name"""):
             print(row)
-        diskconn = sqlite3.connect('c:/temp/disk.db')
-        self.dbconn.backup(diskconn)
-        diskconn.close()
+        # Это чтобы просто посмотерть данные в БД
+        # diskconn = sqlite3.connect('c:/temp/disk.db')
+        # self.dbconn.backup(diskconn)
+        # diskconn.close()
 
 
 class FB2Renamer:
