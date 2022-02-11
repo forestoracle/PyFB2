@@ -1,0 +1,1 @@
+.\venv\Scripts\python.exe fb2tools.py --debug unzip --indir=%1% --removezip

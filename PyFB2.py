@@ -597,7 +597,7 @@ class FB2ConvertBase:
         sql = 'select id, text from note'
         for row in cursor.execute(sql):
             strid = str(row[0])
-            strid = strid.zfill(4)
+            strid = strid.zfill(4)  # число, выровненное нулями слева до 4
             filename = os.path.join(outdir, 'ch_{0}.html'.format(strid))
             bindata = sqlite3.Binary(row[1])
             self.debugmsg('  {0}'.format(filename))
@@ -627,7 +627,6 @@ class FB2ConvertBase:
 
     def create_tables(self):
         # NOTEBOOK
-        self.debugmsg('NOTEBOOK')
         self.dbconn.execute("""CREATE TABLE notebook (
                 id         INTEGER       CONSTRAINT pk_notebook PRIMARY KEY AUTOINCREMENT
                                          UNIQUE NOT NULL,
@@ -677,8 +676,13 @@ class FB2ConvertBase:
                 """)
 
     def backup_memory_db(self, filename: str):
-        """ Создает на диске БД SQLite3 - бэкап in-memory БД """
+        """
+        Создает на диске БД SQLite3 - бэкап in-memory БД
+
+        :param filename: Имя файла БД, вновь созданного на диске
+        """
         self.debugmsg('Запись БД :memory: на диск')
+
         self.debugmsg('  Соединение с БД {0}'.format(filename))
         diskconn = sqlite3.connect(filename)
 
@@ -689,7 +693,14 @@ class FB2ConvertBase:
         diskconn.close()
 
     def insert_notebook(self, name: str, short_descr = '') -> int:
-        """ Вставка новой записной книжки """
+        """
+        Вставка новой записной книжки
+
+        :param name:  Имя записной книжки
+        :param short_descr: Короткое описание
+
+        :return: Идентификатор записной книжки
+        """
         cursor = self.dbconn.cursor()
         sql = 'insert into notebook (name, ShortDescr) values (?, ?)'
         cursor.execute(sql, [name, short_descr])
@@ -822,7 +833,7 @@ class FB2ConvertBase:
         result = result.replace(b'<stanza>', b'<div class="stanza">')
         result = result.replace(b'</stanza>', b'</div>')
         result = result.replace(b'<v>', b'')
-        result = result.replace(b'</v>', b'')
+        result = result.replace(b'</v>', b'<br>')
         result = result.replace(b'<epigraph>', b'<div class="epigraph" align="left">')
         result = result.replace(b'</epigraph>', b'</div>')
         result = result.replace(b'<emphasis>', b'<div class="emphasis" align="left">')
@@ -1065,6 +1076,13 @@ class FB2Hyst(FB2ConvertBase):
             return notebook_id
 
     def get_author_id(self, author_name: str, notebook_id: int) -> int:
+        """
+        Возращает имя идентификатор автора по его имени и ид ЗК
+        Имя автора формируется как LastName+FirstName+MiddleName
+        :param author_name: Имя автора
+        :param notebook_id: Идентификатор записной книжки
+        :return:
+        """
         ParentID = 0
         cursor = self.dbconn.cursor()
         sql = 'select min(id) as id from note where name = ? and NotebookID = ? and ParentID = ?'
@@ -1073,7 +1091,7 @@ class FB2Hyst(FB2ConvertBase):
 
     def add_author(self, author_name: str, notebook_id: int) -> int:
         """
-        Добавляет автора
+        Добавляет автора. Имя автора формируется как LastName+FirstName+MiddleName
         :param author_name: Имя автора
         :param notebook_id: Записная книжка
         :return:

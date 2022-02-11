@@ -6,7 +6,7 @@ import argparse
 import os
 import sqlite3
 
-from PyFB2 import FB2GroupRenamer, FB2HTML, FB2Renamer
+from PyFB2 import FB2GroupRenamer, FB2HTML, FB2Hyst, FB2Renamer
 from PyZip import UnzipFB2
 
 
@@ -55,7 +55,39 @@ def do_hyst(args: argparse.Namespace):
     print('  HystDB: {0}'.format(args.hystdb))
     # Эту проверку нужно выполнять тогда, когда БД уже существует
     # :TODO: Если команда подразумевает создание новой БД - эту проверку выполнять не надо.
-    check_hystdb(args)
+    if args.subaction == 'createdb':
+        hyst = FB2Hyst(args.hystdb)
+        hyst.create_db()
+        exit(0)
+    else:
+        check_hystdb(args)
+
+    hyst = FB2Hyst(args.hystdb)
+    #
+    # Addbook
+    #
+    if args.subaction == 'addnotebook':
+        notebook_id = hyst.get_notebook_id(notebook_name = args.notebook)
+        if notebook_id is None:
+            notebook_id = hyst.insert_notebook(name = args.notebook)
+            print('Добавлена записная книжка {0}:{1}'.format(notebook_id, args.notebook))
+        else:
+            print('Записная книжка уже есть {0}:{1}'.format(notebook_id, args.notebook))
+
+    if args.subaction == 'shownodes':
+        cursor = hyst.dbconn.cursor()
+        sql = 'select id, name from notebook order by id'
+        for row in cursor.execute(sql):
+            print('{0}:{1}'.format(row[0], row[1]))
+        cursor.close()
+
+    if args.subaction == 'addbook':
+        notebook_id = hyst.get_notebook_id(args.notebook)
+        if notebook_id is None:
+            print('Не найдена записная книжка: {0}'.format(args.notebook))
+            exit(200)
+        book_id = hyst.add_book_ext(filename = args.filename, notebook_id = notebook_id)
+        print('Добавлена книга {0}:{1}'.format(book_id, args.filename))
 
 
 def do_rename(args: argparse.Namespace):
@@ -162,6 +194,10 @@ parser_hyst.set_defaults(func = do_hyst)  # обработчик этого па
 
 parser_hyst.add_argument('--hystdb', type = str, default = None, help = 'База данных Hyst', action = 'store',
                          dest = 'hystdb')
+
+parser_hyst.add_argument('--notebook', type = str, default = None, help = 'Название записной книжки', action = 'store',
+                         dest = 'notebook')
+
 parser_hyst.add_argument('--subaction', choices = ['createdb', 'addbook', 'addnotebook', 'addnode', 'shownodes'],
                          help = 'Subaction', required = False, dest = 'subaction')
 
