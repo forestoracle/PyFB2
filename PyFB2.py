@@ -6,6 +6,7 @@ import argparse
 import base64
 import hashlib
 import os
+import shutil
 import re
 import sqlite3
 import xml.etree.ElementTree as ET
@@ -521,14 +522,16 @@ class FB2ConvertBase:
     counter: int  # счетчик записей, служит для заполнения SeqNo
     root_id: int  # идентификатор корневого узла
 
-    def __init__(self, filename: str, debug = False) -> object:
+    def __init__(self, filename: str, css: str = None, debug = False) -> object:
         self.debug = debug
+        self.css = css
         self.parser = FB2Parser(filename, self.debug)
         if self.parser is None:
             return None
         self.level = 0
         self.counter = 0
         self.root_id = 0
+
         self.create_memory_db()
 
     def debugmsg(self, msg: str):
@@ -556,13 +559,14 @@ class FB2ConvertBase:
         result = result.strip(" ")
         return result
 
-    def write_binaries_from_fb2(self, path):
+    def write_binaries_on_disk(self, path):
         """
         Записывает бинарные файлы на диск. Бинарные файлы ожидаются в формате BASE64 и перекодируются в бинарный формат.
         :param path: Путь, по которому будут сохраняться бинарные файлы.
         :return: Список сохраненных файлов.
         """
-        self.debugmsg('Запись картинок на диск:')
+        self.debugmsg('-> write_binaries_from_fb2')
+        self.debugmsg('  Запись картинок на диск:')
         result = []
         images = self.parser.get_binaries()
         for image in images:
@@ -578,7 +582,8 @@ class FB2ConvertBase:
         return result
 
     def write_binaries(self, outdir: str):
-        self.debugmsg('Запись изображений из БД на диск')
+        self.debugmsg('-> write_binaries')
+        self.debugmsg('  Запись изображений из БД на диск')
         cursor = self.dbconn.cursor()
         sql = 'select ShortDescr, image from note_image'
         for row in cursor.execute(sql):
@@ -592,15 +597,15 @@ class FB2ConvertBase:
 
     def write_html(self, outdir: str):
         """ Запись HTML на диск """
-        self.debugmsg('Запись HTML на диск')
+        self.debugmsg('-> write_html')
+        self.debugmsg('  Запись HTML на диск')
         cursor = self.dbconn.cursor()
         sql = 'select id, text from note'
         for row in cursor.execute(sql):
-            strid = str(row[0])
-            strid = strid.zfill(4)  # число, выровненное нулями слева до 4
+            strid = str(row[0]).zfill(4)  # число, выровненное нулями слева до 4
             filename = os.path.join(outdir, 'ch_{0}.html'.format(strid))
             bindata = sqlite3.Binary(row[1])
-            self.debugmsg('  {0}'.format(filename))
+            self.debugmsg('    {0}'.format(filename))
             file = open(filename, 'wb')
             file.write(bindata)
             file.close()
@@ -627,6 +632,7 @@ class FB2ConvertBase:
 
     def create_tables(self):
         # NOTEBOOK
+        self.debugmsg('Создание таблицы NOTEBOOK')
         self.dbconn.execute("""CREATE TABLE notebook (
                 id         INTEGER       CONSTRAINT pk_notebook PRIMARY KEY AUTOINCREMENT
                                          UNIQUE NOT NULL,
@@ -637,7 +643,7 @@ class FB2ConvertBase:
                 ShortDescr VARCHAR (255),
                 state      VARCHAR (1)   DEFAULT A);""")
         # NOTE
-        self.debugmsg('NOTE')
+        self.debugmsg('Создание таблицы NOTE')
         self.dbconn.execute("""CREATE TABLE note (
                 id         INTEGER      CONSTRAINT pk_note PRIMARY KEY AUTOINCREMENT
                                         CONSTRAINT uniq_note UNIQUE
@@ -653,6 +659,7 @@ class FB2ConvertBase:
         self.dbconn.execute("""CREATE INDEX idx_note_parentid ON note(ParentID, state)""")
 
         # NOTE_IMAGE
+        self.debugmsg('Создание таблицы NOTE_IMAGE')
         self.debugmsg('NOTE_IMAGE')
         self.dbconn.execute("""CREATE TABLE note_image (
                 id         INTEGER       CONSTRAINT pk_note_image PRIMARY KEY AUTOINCREMENT
@@ -669,6 +676,7 @@ class FB2ConvertBase:
 
         # LINKS
         self.debugmsg('LINKS')
+        self.debugmsg('Создание таблицы LINKS')
         self.dbconn.execute(""" create table links (
                 id INTEGER CONSTRAINT pk_links PRIMARY KEY AUTOINCREMENT CONSTRAINT uniq_links UNIQUE NOT NULL,
                 link_id varchar (32),
@@ -739,6 +747,7 @@ class FB2ConvertBase:
         Заменяет в указанной секции ссылки на бинарные данные на ссылки на файлы на диске
         :TODO: Надо литерал {http://www.w3.org/1999/xlink} заменить на значение из заголовка
         """
+        self.debugmsg('-> replace_img_links')
         src = ''
         images = section.findall('./image')
         for image in images:
@@ -862,13 +871,15 @@ class FB2HTML(FB2ConvertBase):
     new_outdir: str
     img_outdir: str
     htm_outdir: str
+    css_outdir: str
 
-    def __init__(self, filename: str, debug: bool = False) -> object:
+    def __init__(self, filename: str, css: str = None, debug: bool = False) -> object:
         """
         Конструктор класса FB2HTML
         :param filename: Имя файла FB2
         """
-        super().__init__(filename, debug)
+        super().__init__(filename = filename, css = css, debug = debug)
+
 
     def create_contents_list(self, parent_id: int) -> str:
         cursor = self.dbconn.cursor()
@@ -887,7 +898,7 @@ class FB2HTML(FB2ConvertBase):
         self.create_contents_list(0)
         contents.close()
 
-    def create_dirs(self, outdir: str, html_dir = 'html', image_dir = 'img') -> bool:
+    def create_dirs(self, outdir: str, html_dir = 'html', image_dir = 'img', css_dir= 'css') -> bool:
         # имя автора
         author_name = self.remove_restricted_chars(
             '{0} {1} {2}'.format(self.parser.author_last_name(), self.parser.author_first_name(),
@@ -905,9 +916,26 @@ class FB2HTML(FB2ConvertBase):
 
         self.img_outdir = os.path.join(self.new_outdir, image_dir)
         self.htm_outdir = os.path.join(self.new_outdir, html_dir)
+        self.css_outdir = os.path.join(self.new_outdir, css_dir)
         try:
             os.makedirs(self.img_outdir, exist_ok = True)
             os.makedirs(self.htm_outdir, exist_ok = True)
+            os.makedirs(self.css_outdir, exist_ok = True)
+            return True
+        except:
+            return False
+
+    def copy_css(self) -> bool:
+        """
+        Копирует файл CSS d его каталог
+        :return:  True - если файл скопирован
+        """
+        if self.css is None:
+            return True
+
+        try:
+            self.debugmsg('Копирование CSS {0} -> {1}'.format(self.css, self.css_outdir))
+            shutil.copy2(src = self.css, dst = self.css_outdir)
             return True
         except:
             return False
@@ -927,6 +955,9 @@ class FB2HTML(FB2ConvertBase):
         # подготовка каталогов
         if not self.create_dirs(outdir = outdir):
             print('Ошибка при создании выходных каталогов.')
+            return None
+        if not self.copy_css():
+            print('Ошибка копирования CSS {0}'.format(self.css))
             return None
 
         # вставляем записную книжку, пока это только заглушка
@@ -1019,6 +1050,7 @@ class FB2Hyst(FB2ConvertBase):
         :param notebook_id - идентификатор записной книжки
 
         """
+        self.debugmsg('-> {0}'.format(__name__))
         try:
             src_conn = sqlite3.connect(src_db)
         except:
@@ -1037,6 +1069,7 @@ class FB2Hyst(FB2ConvertBase):
         Создание БД
         :return:
         """
+        self.debugmsg('-> create_db')
         try:
             self.dbconn = sqlite3.connect(self.database)
             self.create_tables()
@@ -1049,6 +1082,7 @@ class FB2Hyst(FB2ConvertBase):
         :param notebook_name: Название ЗК
         :return: Идентификатор ЗК. None - если ЗК не найдена
         """
+        self.debugmsg('-> get_notebook_id')
         cursor = self.dbconn.cursor()
         sql = 'select min(id) AS ID from notebook where name = ?'
         for row in cursor.execute(sql, [notebook_name]):
@@ -1066,6 +1100,7 @@ class FB2Hyst(FB2ConvertBase):
         :return: Идентификатор новой записной книжки
         :TODO: Нужно проверить, что книжки с таким именем еще нет в таблице NOTEBOOK
         """
+        self.debugmsg('-> add_notebook')
         notebook_id = self.get_notebook_id(notebook_name = notebook_name)
         if notebook_id is None:
             notebook_id = self.insert_notebook(notebook_name, short_descr)
@@ -1083,6 +1118,7 @@ class FB2Hyst(FB2ConvertBase):
         :param notebook_id: Идентификатор записной книжки
         :return:
         """
+        self.debugmsg('-> get_author_id')
         ParentID = 0
         cursor = self.dbconn.cursor()
         sql = 'select min(id) as id from note where name = ? and NotebookID = ? and ParentID = ?'
@@ -1096,6 +1132,7 @@ class FB2Hyst(FB2ConvertBase):
         :param notebook_id: Записная книжка
         :return:
         """
+        self.debugmsg('-> add_author')
         author_id = self.get_author_id(author_name = author_name, notebook_id = notebook_id)
         if author_id is None:
             self.debugmsg('Добавляем автора: {0} - {1} - {2}'.format(author_id, author_name, notebook_id))
@@ -1107,12 +1144,14 @@ class FB2Hyst(FB2ConvertBase):
             return author_id
 
     def get_book_id(self, title: str, author_id: int):
+        self.debugmsg('-> get_book_id')
         cursor = self.dbconn.cursor()
         sql = 'select min(id) from note where ParentID = ? and name = ?'
         for row in cursor.execute(sql, [author_id, title]):
             return row[0]
 
     def add_book_ext(self, filename: str, notebook_id: int) -> int:
+        self.debugmsg('-> add_book_ext')
         self.parser = FB2Parser(filename = filename, debug = self.debug)
         author = '{0} {1} {2}'.format(self.parser.author_last_name(), self.parser.author_first_name(),
                                       self.parser.author_middle_name())
@@ -1122,6 +1161,7 @@ class FB2Hyst(FB2ConvertBase):
         return self.add_book(filename = filename, author_id = author_id, notebook_id = notebook_id)
 
     def get_book_cover(self) -> str:
+        self.debugmsg('-> get_book_cover')
         cursor = self.dbconn.cursor()
         sql = 'select min(id) from note_image where book_id=? and ShortDescr=?'
         for row in cursor.execute(sql, [self.root_id, self.parser.cover_page]):
@@ -1141,6 +1181,7 @@ class FB2Hyst(FB2ConvertBase):
         return result
 
     def update_note(self, note_id: int, text: str):
+        self.debugmsg('-> update_note')
         cursor = self.dbconn.cursor()
         sql = 'update note set text = ? where id = ?'
         cursor.execute(sql, [text.encode('utf-8'), note_id])
@@ -1157,7 +1198,7 @@ class FB2Hyst(FB2ConvertBase):
         """
         # if self.parser is None:
         #    self.parser = FB2Parser(filename=filename, debug=self.debug)
-
+        self.debugmsg('-> add_book')
         book_id = self.get_book_id(title = self.parser.title, author_id = author_id)
         if not book_id is None:
             self.debugmsg('= W = Книга уже в БД: {0} - {1}'.format(book_id, self.parser.title))

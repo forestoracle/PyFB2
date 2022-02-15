@@ -41,9 +41,9 @@ def check_tmpl(args: argparse.Namespace):
         exit(104)
 
 
-def check_file_exists(args: argparse.Namespace):
-    if not os.path.isfile(args.filename):
-        print('Указан несуществующий входной файл {0}'.format(args.filename))
+def check_file_exists(filename: str):
+    if not os.path.isfile(filename):
+        print('Указан несуществующий входной файл {0}'.format(filename))
         exit(105)
 
 
@@ -93,7 +93,7 @@ def do_hyst(args: argparse.Namespace):
 def do_rename(args: argparse.Namespace):
     print('\nПереименование файла.')
     print('    Файл: {0}\n  Шаблон: {1}'.format(args.filename, args.rename_template))
-    check_file_exists(args)
+    check_file_exists(args.filename)
     check_tmpl(args)
     renamer = FB2Renamer(filename = args.filename, template = args.rename_template, outdir = args.outdir)
     # Проверим, что объект создался и готов к работе
@@ -124,7 +124,12 @@ def do_html(args: argparse.Namespace):
     print('Конвертация FB2 -> HTML')
     print('    Файл: {0}'.format(args.filename))
     print(' Каталог: {0}'.format(args.outdir))
-    html = FB2HTML(filename = args.filename, debug = args.debug)
+    if args.css is not None:
+        check_file_exists(args.css)
+        html = FB2HTML(filename = args.filename, css = args.css, debug = args.debug)
+    else:
+        html = FB2HTML(filename = args.filename, debug = args.debug)
+
     if html is None:
         print('Ошибка открытия файла {0}'.format(args.filename))
         exit(201)
@@ -217,6 +222,8 @@ parser_html.add_argument('--file', type = str, default = None, help = 'FB2 фа�
 parser_html.add_argument('--outdir', type = str, default = None, help = 'Каталог для записи результатов работы',
                          action = 'store',
                          dest = 'outdir')
+parser_html.add_argument('--css', type = str, default = None, help = 'Применить ко всем файлам стиль из файла CSS',
+                         action = 'store', dest = 'css')
 
 #
 #  Zip parser
