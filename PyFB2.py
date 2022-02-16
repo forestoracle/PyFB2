@@ -606,15 +606,16 @@ class FB2ConvertBase:
         self.debugmsg('-> write_html')
         self.debugmsg('  Запись HTML на диск')
         cursor = self.dbconn.cursor()
-        sql = 'select id, text from note'
+        sql = 'select id, text, length(text) from note'
         for row in cursor.execute(sql):
-            strid = str(row[0]).zfill(4)  # число, выровненное нулями слева до 4
-            filename = os.path.join(outdir, 'ch_{0}.html'.format(strid))
-            bindata = sqlite3.Binary(row[1])
-            self.debugmsg('    {0}'.format(filename))
-            file = open(filename, 'wb')
-            file.write(bindata)
-            file.close()
+            if int(row[2]) > 0:
+                strid = str(row[0]).zfill(4)  # число, выровненное нулями слева до 4
+                filename = os.path.join(outdir, 'ch_{0}.html'.format(strid))
+                bindata = sqlite3.Binary(row[1])
+                self.debugmsg('    {0}'.format(filename))
+                file = open(filename, 'wb')
+                file.write(bindata)
+                file.close()
         cursor.close()
 
     def insert_images(self, book_id = 0):
@@ -848,7 +849,7 @@ class FB2ConvertBase:
         result = result.replace(b'<stanza>', b'<div class="stanza">')
         result = result.replace(b'</stanza>', b'</div>')
         result = result.replace(b'<v>', b'')
-        result = result.replace(b'</v>', b'<br>')
+        result = result.replace(b'</v>', b'')
         result = result.replace(b'<epigraph>', b'<div class="epigraph" align="left">')
         result = result.replace(b'</epigraph>', b'</div>')
         result = result.replace(b'<emphasis>', b'<div class="emphasis" align="left">')
@@ -903,12 +904,18 @@ class FB2HTML(FB2ConvertBase):
             return
 
         cursor = self.dbconn.cursor()
-        sql = 'select id, name from note where ParentID = ? order by id asc'
+        sql = 'select id, name, length(text) from note where ParentID = ? order by id asc'
         self.contents.write(b'\n<ul>')
         for row in cursor.execute(sql, [parent_id]):
+            note_size = int(row[2])
             strid = str(row[0]).zfill(4)
-            result = bytes(
-                '\n<li><a href=html/{0}>{1}</a></li>'.format('ch_{0}.html'.format(strid), row[1]).encode('utf-8'))
+            if note_size > 0:
+                result = bytes(
+                    '\n<li><a href=html/{0}>{1}</a></li>'.format('ch_{0}.html'.format(strid), row[1]).encode('utf-8'))
+            else:
+                result = bytes(
+                    '\n<li>{0}</li>'.format(row[1]).encode('utf-8'))
+
             self.contents.write(result)
             self.create_contents_list(row[0])
 
@@ -921,6 +928,7 @@ class FB2HTML(FB2ConvertBase):
                                                   bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
         contents_header = contents_header.replace(b'$title$', bytes(self.parser.title.encode('utf-8')))
         self.contents.write(contents_header)
+        self.contents.write(bytes('\n<p><img src="./img/{0}"></p>'.format(self.parser.cover_page).encode('utf-8')))
         for author in self.parser.authors:
             self.contents.write(
                 bytes('<h1 class="author">{0} {1} {2}</h1>\n'.format(self.parser.author_last_name(author),
