@@ -6,8 +6,8 @@ import argparse
 import base64
 import hashlib
 import os
-import shutil
 import re
+import shutil
 import sqlite3
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -521,6 +521,12 @@ class FB2ConvertBase:
     level: int  # уровень вложенности глав
     counter: int  # счетчик записей, служит для заполнения SeqNo
     root_id: int  # идентификатор корневого узла
+    html_header: bytes = b'<html xml:lang = "ru-ru" lang = "ru-ru">' \
+                         b'<head>' \
+                         b'<link rel="stylesheet" href="$CSS$" type="text/css">' \
+                         b'<meta http-equiv = "content-type" content = "text/html; charset=utf-8" />' \
+                         b'<title>$title$</title >' \
+                         b'</head>'
 
     def __init__(self, filename: str, css: str = None, debug = False) -> object:
         self.debug = debug
@@ -660,7 +666,6 @@ class FB2ConvertBase:
 
         # NOTE_IMAGE
         self.debugmsg('Создание таблицы NOTE_IMAGE')
-        self.debugmsg('NOTE_IMAGE')
         self.dbconn.execute("""CREATE TABLE note_image (
                 id         INTEGER       CONSTRAINT pk_note_image PRIMARY KEY AUTOINCREMENT
                                          CONSTRAINT uniq_note_image UNIQUE
@@ -675,7 +680,6 @@ class FB2ConvertBase:
         self.dbconn.execute("""CREATE INDEX idx_note_image_md5 ON note_image(MD5)""")
 
         # LINKS
-        self.debugmsg('LINKS')
         self.debugmsg('Создание таблицы LINKS')
         self.dbconn.execute(""" create table links (
                 id INTEGER CONSTRAINT pk_links PRIMARY KEY AUTOINCREMENT CONSTRAINT uniq_links UNIQUE NOT NULL,
@@ -753,7 +757,7 @@ class FB2ConvertBase:
         for image in images:
             image.tag = 'img'
             image_name = image.attrib['{http://www.w3.org/1999/xlink}href']
-            # src = '../img/{0}'.format(image.attrib['{http://www.w3.org/1999/xlink}href'].replace('#', ''))
+            src = '../img/{0}'.format(image.attrib['{http://www.w3.org/1999/xlink}href'].replace('#', ''))
             cursor = self.dbconn.cursor()
             sql = 'select id from note_image where book_id=? and ShortDescr=?'
             print('root: {0} image {1}'.format(self.root_id, image_name.replace('#', '')))
@@ -820,11 +824,6 @@ class FB2ConvertBase:
 
     def replace_fb2_html(self, fb2str: bytes, level: int, title: bytes) -> bytes:
         """ Заменяет тэги FB2 на тэги HTML """
-        s = b'<html xml:lang = "ru-ru" lang = "ru-ru">' \
-            b'<head>' \
-            b'<meta http-equiv = "content-type" content = "text/html; charset=utf-8" />' \
-            b'<title>$title$</title >' \
-            b'</head>'
 
         result = fb2str
         result = result.replace(b'<section>', b'<body>')
@@ -851,8 +850,9 @@ class FB2ConvertBase:
         result = result.replace(b'</text-author>', b'</p>')
         # <cite> </cite>
 
-        result = s + result + b'</html>'
+        result = self.html_header + result + b'</html>'
         result = result.replace(b'$title$', title)
+        result = result.replace(b'$CSS$', bytes('./../css/{0}'.format(self.css_filename).encode('utf-8')))
         return result
 
     def merge_bodies(self, body1: Element, body2: Element) -> Element:
@@ -863,6 +863,9 @@ class FB2ConvertBase:
         """ Выпоняет слияние двух элементов section """
         pass
 
+    @property
+    def css_filename(self):
+        return os.path.split(self.css)[1]
 
 class FB2HTML(FB2ConvertBase):
     """
@@ -880,25 +883,31 @@ class FB2HTML(FB2ConvertBase):
         """
         super().__init__(filename = filename, css = css, debug = debug)
 
-
     def create_contents_list(self, parent_id: int) -> str:
         cursor = self.dbconn.cursor()
         sql = 'select id, name from note where ParentID = ? order by id asc'
-        self.contents.write('<ul>')
+        self.contents.write(b'<ul>')
         for row in cursor.execute(sql, [parent_id]):
             strid = str(row[0]).zfill(4)
-            result = '<a href=html/{0}>{1}</a><br>'.format('ch_{0}.html'.format(strid), row[1])
+            result = bytes('<a href=html/{0}>{1}</a><br>'.format('ch_{0}.html'.format(strid), row[1]).encode('utf-8'))
             self.contents.write(result)
             self.create_contents_list(row[0])
 
         cursor.close()
-        self.contents.write('</ul>')
+        self.contents.write(b'</ul>')
 
-    def create_contents(self, outdir: str):
-        self.create_contents_list(0)
-        contents.close()
+    def write_contents_header(self):
+        contents_header = self.html_header
+        contents_header = contents_header.replace(b'$CSS$', bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
+        contents_header = contents_header.replace(b'$title$', bytes(self.parser.title.encode('utf-8')))
+        self.contents.write(contents_header)
+        for author in self.parser.authors:
+            self.contents.write(bytes('<h1 class="author">{0} {1} {2}</h1>\n'.format(self.parser.author_last_name(author),
+                                                                               self.parser.author_first_name(author),
+                                                                               self.parser.author_middle_name()).encode('utf-8')))
 
-    def create_dirs(self, outdir: str, html_dir = 'html', image_dir = 'img', css_dir= 'css') -> bool:
+
+    def create_dirs(self, outdir: str, html_dir = 'html', image_dir = 'img', css_dir = 'css') -> bool:
         # имя автора
         author_name = self.remove_restricted_chars(
             '{0} {1} {2}'.format(self.parser.author_last_name(), self.parser.author_first_name(),
@@ -1019,7 +1028,8 @@ class FB2HTML(FB2ConvertBase):
         self.write_html(self.htm_outdir)
 
         filename = os.path.join(self.new_outdir, 'index.html')
-        self.contents = open(filename, 'w')
+        self.contents = open(filename, 'wb')
+        self.write_contents_header()
         self.create_contents_list(0)
         self.contents.close()
 
