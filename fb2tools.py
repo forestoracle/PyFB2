@@ -56,8 +56,7 @@ def do_hyst(args: argparse.Namespace):
     # Эту проверку нужно выполнять тогда, когда БД уже существует
     # :TODO: Если команда подразумевает создание новой БД - эту проверку выполнять не надо.
     if args.subaction == 'createdb':
-        hyst = FB2Hyst(args.hystdb)
-        hyst.create_db()
+        hyst = FB2Hyst(database = args.hystdb, name = args.dbname)
         exit(0)
     else:
         check_hystdb(args)
@@ -205,6 +204,9 @@ parser_hyst.add_argument('--notebook', type = str, default = None, help = 'На�
 
 parser_hyst.add_argument('--subaction', choices = ['createdb', 'addbook', 'addnotebook', 'addnode', 'shownodes'],
                          help = 'Subaction', required = False, dest = 'subaction')
+
+parser_hyst.add_argument('--dbname', type = str, default = None, help = 'Название базы данных', action = 'store',
+                         dest = 'dbname')
 
 group_src = parser_hyst.add_mutually_exclusive_group()
 

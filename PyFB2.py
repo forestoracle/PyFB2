@@ -521,12 +521,12 @@ class FB2ConvertBase:
     level: int  # уровень вложенности глав
     counter: int  # счетчик записей, служит для заполнения SeqNo
     root_id: int  # идентификатор корневого узла
-    html_header: bytes = b'<html xml:lang = "ru-ru" lang = "ru-ru">' \
-                         b'<head>' \
-                         b'<link rel="stylesheet" href="$CSS$" type="text/css">' \
-                         b'<meta http-equiv = "content-type" content = "text/html; charset=utf-8" />' \
-                         b'<title>$title$</title >' \
-                         b'</head>'
+    html_header: bytes = b'<html xml:lang = "ru-ru" lang = "ru-ru">\n' \
+                         b'  <head>\n' \
+                         b'     <link rel="stylesheet" href="$CSS$" type="text/css">\n' \
+                         b'     <meta http-equiv = "content-type" content = "text/html; charset=utf-8" />\n' \
+                         b'     <title>$title$</title >\n' \
+                         b'  </head>\n'
 
     def __init__(self, filename: str, css: str = None, debug = False) -> object:
         self.debug = debug
@@ -637,6 +637,13 @@ class FB2ConvertBase:
         self.create_tables()
 
     def create_tables(self):
+        # NB_PROFILE
+        self.debugmsg('Создание таблицы NB_PROFILE')
+        self.dbconn.execute("""CREATE TABLE nb_profile (
+                name        VARCHAR (255) NOT NULL,
+                ProfileType VARCHAR (255) NOT NULL DEFAULT NOTEBOOK       
+        );""")
+
         # NOTEBOOK
         self.debugmsg('Создание таблицы NOTEBOOK')
         self.dbconn.execute("""CREATE TABLE notebook (
@@ -867,6 +874,7 @@ class FB2ConvertBase:
     def css_filename(self):
         return os.path.split(self.css)[1]
 
+
 class FB2HTML(FB2ConvertBase):
     """
     Класс для преобразования файла FB2 в файлы HTML
@@ -883,29 +891,41 @@ class FB2HTML(FB2ConvertBase):
         """
         super().__init__(filename = filename, css = css, debug = debug)
 
+    def count_children(self, parent_id) -> int:
+        cursor = self.dbconn.cursor()
+        sql = 'select count(1) as cnt from note where ParentID = ?'
+        for row in cursor.execute(sql, [parent_id]):
+            return int(row[0])
+
     def create_contents_list(self, parent_id: int) -> str:
+
+        if self.count_children(parent_id) == 0:
+            return
+
         cursor = self.dbconn.cursor()
         sql = 'select id, name from note where ParentID = ? order by id asc'
-        self.contents.write(b'<ul>')
+        self.contents.write(b'\n<ul>')
         for row in cursor.execute(sql, [parent_id]):
             strid = str(row[0]).zfill(4)
-            result = bytes('<a href=html/{0}>{1}</a><br>'.format('ch_{0}.html'.format(strid), row[1]).encode('utf-8'))
+            result = bytes(
+                '\n<li><a href=html/{0}>{1}</a></li>'.format('ch_{0}.html'.format(strid), row[1]).encode('utf-8'))
             self.contents.write(result)
             self.create_contents_list(row[0])
 
         cursor.close()
-        self.contents.write(b'</ul>')
+        self.contents.write(b'\n</ul>')
 
     def write_contents_header(self):
         contents_header = self.html_header
-        contents_header = contents_header.replace(b'$CSS$', bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
+        contents_header = contents_header.replace(b'$CSS$',
+                                                  bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
         contents_header = contents_header.replace(b'$title$', bytes(self.parser.title.encode('utf-8')))
         self.contents.write(contents_header)
         for author in self.parser.authors:
-            self.contents.write(bytes('<h1 class="author">{0} {1} {2}</h1>\n'.format(self.parser.author_last_name(author),
-                                                                               self.parser.author_first_name(author),
-                                                                               self.parser.author_middle_name()).encode('utf-8')))
-
+            self.contents.write(
+                bytes('<h1 class="author">{0} {1} {2}</h1>\n'.format(self.parser.author_last_name(author),
+                                                                     self.parser.author_first_name(author),
+                                                                     self.parser.author_middle_name()).encode('utf-8')))
 
     def create_dirs(self, outdir: str, html_dir = 'html', image_dir = 'img', css_dir = 'css') -> bool:
         # имя автора
@@ -1039,14 +1059,14 @@ class FB2Hyst(FB2ConvertBase):
 
     database: str
 
-    def __init__(self, database: str, debug = True) -> object:
+    def __init__(self, database: str, name: str =  None, debug = True) -> object:
         self.database = database
         self.parser = None
         self.debug = debug
         self.root_id = 0
         self.counter = 0
         self.level = 0
-        if self.create_db() is None:
+        if self.create_db(name = name) is None:
             return None
 
     def merge_databases(self, src_db: str, dst_db: str, parent_id: int, notebook_id: int) -> int:
@@ -1074,17 +1094,25 @@ class FB2Hyst(FB2ConvertBase):
             print('Не удалось соединиться с приемником {0}'.format(dst_db))
             return 0
 
-    def create_db(self) -> object:
+    def create_db(self, name: str = None) -> object:
         """
         Создание БД
         :return:
         """
         self.debugmsg('-> create_db')
-        try:
-            self.dbconn = sqlite3.connect(self.database)
-            self.create_tables()
-        except:
-            return None
+        self.debugmsg('  Имя БД: {0}'.format(name))
+
+        self.dbconn = sqlite3.connect(self.database)
+        self.create_tables()
+        if not name is None:
+            self.debugmsg(' Установка имени БД: {0}'.format(name))
+            cursor = self.dbconn.cursor()
+            sql = 'delete from nb_profile'
+            cursor.execute(sql, [])
+            self.dbconn.commit()
+            sql = 'insert into nb_profile (name, ProfileType) values (?, ?)'
+            cursor.execute(sql, [name, 'NOTEBOOK'])
+            self.dbconn.commit()
 
     def get_notebook_id(self, notebook_name: str) -> int:
         """
