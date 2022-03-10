@@ -1,5 +1,5 @@
 ﻿"""
- Версия: 2022-02-02
+ Версия: 2022-03-10
 
 """
 import argparse
@@ -10,6 +10,7 @@ import re
 import shutil
 import sqlite3
 import xml.etree.ElementTree as ET
+from abc import abstractmethod
 from pathlib import Path
 from xml.etree import ElementTree
 from xml.etree.ElementTree import Element
@@ -313,7 +314,10 @@ class FB2Parser:
         Возвращает серию, в рамках которой была выпущене книга
         :return: Строка с названием серии
         """
-        sequenceElement = self._title_info.find('./sequence')
+        try:
+            sequenceElement = self._title_info.find('./sequence')
+        except:
+            sequenceElement = None
         if sequenceElement is None:
             return ""
         else:
@@ -325,7 +329,10 @@ class FB2Parser:
         Возвращает номер книги в серии, в рамках которой была выпущене книга.
         :return: Номер тома в серии.
         """
-        sequenceElement = self._title_info.find("./sequence")
+        try:
+            sequenceElement = self._title_info.find("./sequence")
+        except:
+            sequenceElement = None
         if sequenceElement is None:
             return ""
         else:
@@ -349,7 +356,7 @@ class FB2Parser:
         imageElement = self._title_info.find('./coverpage/image')
         if not imageElement is None:
             try:
-                print(imageElement.attrib)
+                # print(imageElement.attrib)
                 return imageElement.attrib['{http://www.w3.org/1999/xlink}href'].replace('#', '')
             except KeyError:
                 return ""
@@ -484,9 +491,8 @@ class FB2Parser:
         :param root_section:  Секция, для которой ищутся заголовки
         :return: Список заголовков.
         """
-        titles = section.findall("./title/p")
-        if titles == []:
-            titles = section.findall('./title/p/strong')
+        titles = []
+        titles.extend(section.findall('./title//'))
         return titles
 
     def is_flat_section(self, section: Element) -> bool:
@@ -557,12 +563,12 @@ class FB2ConvertBase:
 
     def get_titles_str(self, section: ElementTree):
         """ Сшивает заголовки секции в одну строку """
-        result = ""
+        result = ''
         titles = self.parser.get_titles(section)
         for title in titles:
-            if title.text:
-                result = result + " " + title.text
-        result = result.strip(" ")
+            if not title.text is None:
+                result = result + ' ' + title.text.strip(' ')
+        result = result.strip(' ')
         return result
 
     def write_binaries_on_disk(self, path):
@@ -640,14 +646,14 @@ class FB2ConvertBase:
     def create_tables(self):
         # NB_PROFILE
         self.debugmsg('Создание таблицы NB_PROFILE')
-        self.dbconn.execute("""CREATE TABLE nb_profile (
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS nb_profile (
                 name        VARCHAR (255) NOT NULL,
                 ProfileType VARCHAR (255) NOT NULL DEFAULT NOTEBOOK       
         );""")
 
         # NOTEBOOK
         self.debugmsg('Создание таблицы NOTEBOOK')
-        self.dbconn.execute("""CREATE TABLE notebook (
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS notebook (
                 id         INTEGER       CONSTRAINT pk_notebook PRIMARY KEY AUTOINCREMENT
                                          UNIQUE NOT NULL,
                 name       VARCHAR (255) NOT NULL,
@@ -658,7 +664,7 @@ class FB2ConvertBase:
                 state      VARCHAR (1)   DEFAULT A);""")
         # NOTE
         self.debugmsg('Создание таблицы NOTE')
-        self.dbconn.execute("""CREATE TABLE note (
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS note (
                 id         INTEGER      CONSTRAINT pk_note PRIMARY KEY AUTOINCREMENT
                                         CONSTRAINT uniq_note UNIQUE
                                         NOT NULL,
@@ -670,11 +676,11 @@ class FB2ConvertBase:
                 text       TEXT,
                 state      CHAR (1)      NOT NULL DEFAULT A,
                 TextType   VARCHAR (10)  DEFAULT HTML);""")
-        self.dbconn.execute("""CREATE INDEX idx_note_parentid ON note(ParentID, state)""")
+        self.dbconn.execute("""CREATE INDEX IF NOT EXISTS idx_note_parentid ON note(ParentID, state)""")
 
         # NOTE_IMAGE
         self.debugmsg('Создание таблицы NOTE_IMAGE')
-        self.dbconn.execute("""CREATE TABLE note_image (
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS note_image (
                 id         INTEGER       CONSTRAINT pk_note_image PRIMARY KEY AUTOINCREMENT
                                          CONSTRAINT uniq_note_image UNIQUE
                                          NOT NULL,
@@ -685,15 +691,26 @@ class FB2ConvertBase:
                 MD5        VARCHAR (40),
                 thumbnail  BLOB);""")
 
-        self.dbconn.execute("""CREATE INDEX idx_note_image_md5 ON note_image(MD5)""")
+        self.dbconn.execute("""CREATE INDEX IF NOT EXISTS idx_note_image_md5 ON note_image(MD5)""")
 
         # LINKS
         self.debugmsg('Создание таблицы LINKS')
-        self.dbconn.execute(""" create table links (
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS links (
                 id INTEGER CONSTRAINT pk_links PRIMARY KEY AUTOINCREMENT CONSTRAINT uniq_links UNIQUE NOT NULL,
                 link_id varchar (32),
                 filename varchar (32)) 
                 """)
+
+        # CSS
+        self.debugmsg('Создание таблицы CSS')
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS css (
+                id       INTEGER       CONSTRAINT pk_css PRIMARY KEY AUTOINCREMENT
+                                       UNIQUE NOT NULL,
+                name     VARCHAR (255) NOT NULL,
+                code     VARCHAR (255) UNIQUE NOT NULL,
+                filename VARCHAR (255) UNIQUE NOT NULL,
+                css      TEXT
+            );""")
 
     def backup_memory_db(self, filename: str):
         """
@@ -761,17 +778,16 @@ class FB2ConvertBase:
         """
         self.debugmsg('-> replace_img_links')
         src = ''
-        images = section.findall('./image')
+        images = section.findall('./image') + section.findall('./*/image') + section.findall('./**/image')
         for image in images:
             image.tag = 'img'
             image_name = image.attrib['{http://www.w3.org/1999/xlink}href']
             src = '../img/{0}'.format(image.attrib['{http://www.w3.org/1999/xlink}href'].replace('#', ''))
             cursor = self.dbconn.cursor()
             sql = 'select id from note_image where book_id=? and ShortDescr=?'
-            print('root: {0} image {1}'.format(self.root_id, image_name.replace('#', '')))
+            self.debugmsg('root: {0} image {1}'.format(self.root_id, image_name.replace('#', '')))
             for row in cursor.execute(sql, [self.root_id, image_name.replace('#', '')]):
                 src = 'db://thisdb.note_image.image.{0}'.format(row[0])
-                print('source', src)
             cursor.close()
             del image.attrib['{http://www.w3.org/1999/xlink}href']
             if src > '':
@@ -849,7 +865,7 @@ class FB2ConvertBase:
         result = result.replace(b'<stanza>', b'<div class="stanza">')
         result = result.replace(b'</stanza>', b'</div>')
         result = result.replace(b'<v>', b'')
-        result = result.replace(b'</v>', b'')
+        result = result.replace(b'</v>', b'<br>')
         result = result.replace(b'<epigraph>', b'<div class="epigraph" align="left">')
         result = result.replace(b'</epigraph>', b'</div>')
         result = result.replace(b'<emphasis>', b'<div class="emphasis" align="left">')
@@ -860,7 +876,9 @@ class FB2ConvertBase:
 
         result = self.html_header + result + b'</html>'
         result = result.replace(b'$title$', title)
-        result = result.replace(b'$CSS$', bytes('./../css/{0}'.format(self.css_filename).encode('utf-8')))
+
+        # result = result.replace(b'$CSS$', bytes('./../css/{0}'.format(self.css_filename).encode('utf-8')))
+        result = self.replace_css(result, bytes('./../css/{0}'.format(self.css_filename).encode('utf-8')))
         return result
 
     def merge_bodies(self, body1: Element, body2: Element) -> Element:
@@ -873,7 +891,18 @@ class FB2ConvertBase:
 
     @property
     def css_filename(self):
-        return os.path.split(self.css)[1]
+        if not self.css is None:
+            return os.path.split(self.css)[1]
+        else:
+            return None
+
+    @abstractmethod
+    def copy_css(self) -> bool:
+        pass
+
+    @abstractmethod
+    def replace_css(self, text: bytes, css: bytes) -> bytes:
+        pass
 
 
 class FB2HTML(FB2ConvertBase):
@@ -924,8 +953,10 @@ class FB2HTML(FB2ConvertBase):
 
     def write_contents_header(self):
         contents_header = self.html_header
-        contents_header = contents_header.replace(b'$CSS$',
-                                                  bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
+        contents_header = self.replace_css(contents_header,
+                                           bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
+        # contents_header = contents_header.replace(b'$CSS$',
+        #                                          bytes('./css/{0}'.format(self.css_filename).encode('utf-8')))
         contents_header = contents_header.replace(b'$title$', bytes(self.parser.title.encode('utf-8')))
         self.contents.write(contents_header)
         self.contents.write(bytes('\n<p><img src="./img/{0}"></p>'.format(self.parser.cover_page).encode('utf-8')))
@@ -948,7 +979,7 @@ class FB2HTML(FB2ConvertBase):
         try:
             os.makedirs(self.new_outdir, exist_ok = True)
         except:
-            print('Ошибка при создании каталога {0}'.format(self.new_outdir))
+            print('Error: Cant create catalog {0}'.format(self.new_outdir))
             return False
 
         self.img_outdir = os.path.join(self.new_outdir, image_dir)
@@ -977,6 +1008,9 @@ class FB2HTML(FB2ConvertBase):
         except:
             return False
 
+    def replace_css(self, text: bytes, css: bytes) -> bytes:
+        return text.replace(b'$CSS$', css)
+
     def create_html(self, outdir: str = None) -> str:
 
         """
@@ -991,10 +1025,10 @@ class FB2HTML(FB2ConvertBase):
         """
         # подготовка каталогов
         if not self.create_dirs(outdir = outdir):
-            print('Ошибка при создании выходных каталогов.')
+            print('Error: Cant creating catalog {0}.'.format(outdir))
             return None
         if not self.copy_css():
-            print('Ошибка копирования CSS {0}'.format(self.css))
+            print('Error: Cant copy CSS {0}'.format(self.css))
             return None
 
         # вставляем записную книжку, пока это только заглушка
@@ -1026,7 +1060,7 @@ class FB2HTML(FB2ConvertBase):
                                 cursor.execute('insert into links (link_id) values (?)', [id])
                                 self.dbconn.commit()
                             except:
-                                pass
+                                print('Ошибка при вставке в таблицу LINKS')
 
                         self.insert_note(title = 'Примечания', parent_id = self.root_id,
                                          text = ElementTree.tostring(body, 'utf-8'), notebook_id = notebook_id)
@@ -1067,10 +1101,12 @@ class FB2Hyst(FB2ConvertBase):
 
     database: str
 
-    def __init__(self, database: str, name: str =  None, debug = True) -> object:
+    def __init__(self, database: str, name: str = None, css: str = None, debug = True) -> object:
         self.database = database
+        self.css = css
         self.parser = None
         self.debug = debug
+
         self.root_id = 0
         self.counter = 0
         self.level = 0
@@ -1092,14 +1128,14 @@ class FB2Hyst(FB2ConvertBase):
         try:
             src_conn = sqlite3.connect(src_db)
         except:
-            print('Не удалось соединиться с источником {0}'.format(src_db))
+            print('Error: Cant connect to source DB {0}'.format(src_db))
             return 0
 
         try:
             src_conn = sqlite3.connect(dst_db)
         except:
             src_conn.close()
-            print('Не удалось соединиться с приемником {0}'.format(dst_db))
+            print('Error: Cant connect to target DB {0}'.format(dst_db))
             return 0
 
     def create_db(self, name: str = None) -> object:
@@ -1112,6 +1148,7 @@ class FB2Hyst(FB2ConvertBase):
 
         self.dbconn = sqlite3.connect(self.database)
         self.create_tables()
+        self.copy_css()
         if not name is None:
             self.debugmsg(' Установка имени БД: {0}'.format(name))
             cursor = self.dbconn.cursor()
@@ -1140,11 +1177,9 @@ class FB2Hyst(FB2ConvertBase):
         то возвращает ее идентификатор. Если не существует, то добавляет новую запись и возвращает
         идентификатор новой записи.
 
-
         :param notebook_name: Имя записной книжки
         :param short_descr: Короткое описание
         :return: Идентификатор новой записной книжки
-        :TODO: Нужно проверить, что книжки с таким именем еще нет в таблице NOTEBOOK
         """
         self.debugmsg('-> add_notebook')
         notebook_id = self.get_notebook_id(notebook_name = notebook_name)
@@ -1223,7 +1258,6 @@ class FB2Hyst(FB2ConvertBase):
                      </body>
                      </html>
                      """.format(self.parser.title, cover_image)
-        print(result)
         return result
 
     def update_note(self, note_id: int, text: str):
@@ -1242,8 +1276,8 @@ class FB2Hyst(FB2ConvertBase):
         :param notebook_id: Идентификатор записной книжки
         :return:
         """
-        # if self.parser is None:
-        #    self.parser = FB2Parser(filename=filename, debug=self.debug)
+        if self.parser is None:
+            self.parser = FB2Parser(filename = filename, debug = self.debug)
         self.debugmsg('-> add_book')
         book_id = self.get_book_id(title = self.parser.title, author_id = author_id)
         if not book_id is None:
@@ -1296,6 +1330,24 @@ class FB2Hyst(FB2ConvertBase):
                 self.insert_child_sections(body, self.root_id,
                                            notebook_id)  # перебор всех секций, 0 - идентификатор тела как корневого узла
 
+    def copy_css(self) -> bool:
+        if self.css is None:
+            return True
+        if not os.path.isfile(self.css):
+            return False
+        with open(self.css, 'rb') as f:
+            css_text = f.read()
+            f.close()
+
+        cursor = self.dbconn.cursor()
+        sql = 'insert into CSS (name, code, filename, css) values (?, ?, ?, ?)'
+        cursor.execute(sql, [self.css_filename, self.css_filename, self.css_filename, sqlite3.Binary(css_text)])
+        self.dbconn.commit()
+        cursor.close()
+
+    def replace_css(self, text: bytes, css: bytes) -> bytes:
+        return text.replace(b'$CSS$', b'db://thisdb.css.css.1')
+
 
 class FB2DirScaner:
     start_dir: Path
@@ -1304,25 +1356,25 @@ class FB2DirScaner:
     def __init__(self, start_dir: str) -> object:
         self.start_dir = Path(start_dir)
         if not self.start_dir.is_dir():
-            print('Error. Directory not exists: {0}'.format(self.start_dir))
+            print('Error: Directory not exists: {0}'.format(self.start_dir))
             return None
         self.create_memory_db()
 
     def create_memory_db(self):
         try:
-            self.dbconn = sqlite3.connect(":memory:")
+            self.dbconn = sqlite3.connect("authors.db")
         except IOError as err:
-            print("I/O error: {0}".format(err))
+            print("Error: I/O error: {0}".format(err))
             return None
-        self.dbconn.execute("""CREATE TABLE authors
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS authors 
                        (ID integer CONSTRAINT pk_notebook PRIMARY KEY AUTOINCREMENT UNIQUE NOT NULL,
                         first_name varchar2(255), last_name varchar2(255), middle_name varchar2)""")
-        self.dbconn.execute("""CREATE TABLE works (author_id integer, title varchar(1024))""")
+        self.dbconn.execute("""CREATE TABLE IF NOT EXISTS works (author_id integer, title varchar(1024))""")
 
     def scan_dir(self):
         for item in list(self.start_dir.glob('**/*.fb2')):
             try:
-                parser = FB2Parser(item, self.debug)
+                parser = FB2Parser(item)
                 fn = str(parser.author_first_name()).strip()
                 ln = str(parser.author_last_name()).strip()
                 mn = str(parser.author_middle_name()).strip()
@@ -1332,13 +1384,7 @@ class FB2DirScaner:
                 self.dbconn.commit()
             except:
                 pass;
-        for row in self.dbconn.execute(
-                """SELECT distinct last_name, first_name, middle_name 
-                     FROM authors 
-                    ORDER BY last_name, first_name, middle_name"""):
-            print(row)
-        # Это чтобы просто посмотерть данные в БД
-        # diskconn = sqlite3.connect('c:/temp/disk.db')
+        # diskconn = sqlite3.connect('authors.db')
         # self.dbconn.backup(diskconn)
         # diskconn.close()
 
@@ -1394,12 +1440,12 @@ class FB2Renamer:
         try:
             os.makedirs(self.newPath, exist_ok = True)
         except:
-            print('Error. Cant create dirs {0}'.format(self.newPath))
+            print('Error: Cant create dirs {0}'.format(self.newPath))
             exit(1)
         try:
             os.rename(self.filename, os.path.join(self.newPath, self.newFileName))
         except:
-            print('Error. Cant rename {0} to {1}'.format(self.filename, self.newFileName))
+            print('Error: Cant rename {0} to {1}'.format(self.filename, self.newFileName))
             exit(1)
 
         return self.newFileName
@@ -1411,7 +1457,7 @@ class FB2Renamer:
         """
         parser = FB2Parser(self.filename, self.debug)
         if parser is None:
-            print('FB2Renamer error: bad file. File: {0}'.format(self.old_filename))
+            print('Error: FB2Renamer error: bad file. File: {0}'.format(self.old_filename))
             return
         self.S = parser.sequence_name.strip()
         self.SN = parser.sequence_number.strip()
@@ -1514,7 +1560,7 @@ class FB2GroupRenamer:
         self.debug = debug
         self.outDir = outdir
         if not self.startDir.is_dir():
-            print('Error! Directory not exists: {0}'.format(self.startDir))
+            print('Error: Directory not exists: {0}'.format(self.startDir))
             return None
 
     def rename_all(self) -> int:
@@ -1525,7 +1571,7 @@ class FB2GroupRenamer:
                 newName = renamer.rename()
                 counter += 1
             except:
-                print('Error! Cant rename to {0}'.format(newName))
+                print('Error: Cant rename to {0}'.format(newName))
         return counter
 
 
@@ -1562,10 +1608,9 @@ if __name__ == '__main__':
     args = argparser.parse_args()
 
     if not args.file_name is None:
-        print(args.file_name)
         fb2 = FB2Parser(args.file_name, argparser.debug)
         if fb2 is None:
-            print('Cant open file {0}'.format(args.file_name))
+            print('Error: Cant open file {0}'.format(args.file_name))
             exit(1)
 
     if (not args.flags is None) and (not fb2 is None):
