@@ -1,12 +1,12 @@
 """
-Версия: 2022-02-02
+Версия: 2022-02-18
 
 """
 import argparse
 import os
 import sqlite3
-
-from PyFB2 import FB2GroupRenamer, FB2HTML, FB2Hyst, FB2Renamer
+from pathlib import Path
+from PyFB2 import FB2GroupRenamer, FB2HTML, FB2Hyst, FB2Renamer, FB2DirScaner
 from PyZip import UnzipFB2
 
 
@@ -51,19 +51,20 @@ def check_file_exists(filename: str):
 #  Выполнение действий, указанных в командной строке как главное
 #
 def do_hyst(args: argparse.Namespace):
-    print('\nПреобразование в формат Hyst.')
-    print('  HystDB: {0}'.format(args.hystdb))
-    # Эту проверку нужно выполнять тогда, когда БД уже существует
-    # :TODO: Если команда подразумевает создание новой БД - эту проверку выполнять не надо.
     if args.subaction == 'createdb':
-        hyst = FB2Hyst(database = args.hystdb, name = args.dbname)
+        print('\nСоздание БД Hyst.')
+        print('  HystDB: {0}'.format(args.hystdb))
+        print('  Имя БД: {0}'.format(args.dbname))
+        hyst = FB2Hyst(database = args.hystdb, name = args.dbname, css = args.css, debug = args.debug)
         exit(0)
     else:
         check_hystdb(args)
+    if not args.css is None:
+        check_file_exists(args.css)
 
-    hyst = FB2Hyst(args.hystdb)
+    hyst = FB2Hyst(database = args.hystdb, name = args.dbname, css = args.css, debug = args.debug)
     #
-    # Addbook
+    # Add notebook
     #
     if args.subaction == 'addnotebook':
         notebook_id = hyst.get_notebook_id(notebook_name = args.notebook)
@@ -85,8 +86,25 @@ def do_hyst(args: argparse.Namespace):
         if notebook_id is None:
             print('Не найдена записная книжка: {0}'.format(args.notebook))
             exit(200)
-        book_id = hyst.add_book_ext(filename = args.filename, notebook_id = notebook_id)
-        print('Добавлена книга {0}:{1}'.format(book_id, args.filename))
+
+        # Надо помнить, что имя файла и каталог не могут быть переданы одновременно
+        # Только что-то одно
+        if args.indir is None: # Передано имя файла - добавляем одну книгу
+            # book_id = hyst.add_book_ext(filename = args.filename, notebook_id = notebook_id)
+            book_id = hyst.add_book(filename = args.filename, author_id = 0,  notebook_id = notebook_id)
+            print('  Добавлена книга {0}:{1}'.format(book_id, args.filename))
+        else:
+            check_indir_exists(args)
+            bookcounter = 0
+            filecounter = 0
+            for item in list(Path(args.indir).glob('**/*.fb2')):
+                filecounter += 1
+                book_id = hyst.add_book_ext(filename = item, notebook_id = notebook_id)
+                # :TODO: Исправить. Неправильно считает добавленные книги.
+                if book_id is not None:
+                    bookcounter += 1
+            print('  Обработано файлов: {0}'.format(filecounter))
+            print('  Добавлено книг   : {0}'.format(bookcounter))
 
 
 def do_rename(args: argparse.Namespace):
@@ -207,6 +225,9 @@ parser_hyst.add_argument('--subaction', choices = ['createdb', 'addbook', 'addno
 
 parser_hyst.add_argument('--dbname', type = str, default = None, help = 'Название базы данных', action = 'store',
                          dest = 'dbname')
+parser_hyst.add_argument('--css', type = str, default = None, help = 'Применить ко всем файлам стиль из файла CSS',
+                         action = 'store', dest = 'css')
+
 
 group_src = parser_hyst.add_mutually_exclusive_group()
 
@@ -248,6 +269,10 @@ parser_unzip.add_argument('--removezip', default = False, help = 'Удалять
 #
 #  Разбор командной строки и вызов обработчика
 #
+#scaner = FB2DirScaner('D:/books/Серии')
+#scaner.scan_dir()
+#exit(0)
+
 args = parser.parse_args()
 if args.debug:
     print(args)
