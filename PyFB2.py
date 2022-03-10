@@ -1241,7 +1241,14 @@ class FB2Hyst(FB2ConvertBase):
         # del self.parser
         return self.add_book(filename = filename, author_id = author_id, notebook_id = notebook_id)
 
-    def get_book_cover(self) -> str:
+    def get_book_cover(self) -> bytes:
+        """
+
+        :return:
+        :TODO: 1. Иногда изображения обложки выглядят так <img src=db://thisdb.note_image.image.None>
+               2. Это надо обрабатывать. И не применяется CSS - тоже доработать.
+               3. ОШИБКА!!! cover_image НАСЛЕДУЕТСЯ ОТ ПРЕДЫДУЩЕЙ КНИГИ.
+        """
         self.debugmsg('-> get_book_cover')
         cursor = self.dbconn.cursor()
         sql = 'select min(id) from note_image where book_id=? and ShortDescr=?'
@@ -1255,10 +1262,11 @@ class FB2Hyst(FB2ConvertBase):
                      </head>
                      <body>
                      {1}
+                     {2}
                      </body>
                      </html>
-                     """.format(self.parser.title, cover_image)
-        return result
+                     """.format(self.parser.title, cover_image, self.parser.annotation)
+        return bytes(result.encode('utf-8'))
 
     def update_note(self, note_id: int, text: str):
         self.debugmsg('-> update_note')
@@ -1275,6 +1283,7 @@ class FB2Hyst(FB2ConvertBase):
         :param author_id: Идентификатор автора
         :param notebook_id: Идентификатор записной книжки
         :return:
+        :TODO:  Аннотация добавляется как простой текст. Нужно заключить ее в HTML
         """
         if self.parser is None:
             self.parser = FB2Parser(filename = filename, debug = self.debug)
@@ -1284,7 +1293,7 @@ class FB2Hyst(FB2ConvertBase):
             self.debugmsg('= W = Книга уже в БД: {0} - {1}'.format(book_id, self.parser.title))
             return book_id
         self.debugmsg('= I = Добавляем книгу {0}'.format(self.parser.title))
-        self.root_id = self.insert_note(self.parser.title, author_id, ''.encode('utf-8'),
+        self.root_id = self.insert_note(self.parser.title, author_id, self.get_book_cover(),
                                         notebook_id)
 
         book_id = self.root_id
