@@ -5,7 +5,7 @@ import os
 
 
 class HystDB:
-    """ Класс для работы с БД Hyst --- """
+    """ Класс для работы с БД Hyst """
     def __init__(self, filename: str = None):
         """
         Создает новую БД в памяти или на диске.
@@ -35,4 +35,14 @@ class HystDB:
     def set_database_name(self, name: str):
         self._connection.execute(f"insert into nb_profile (name) values ('{name}')")
         self._connection.commit()
-   
+
+    def is_memory_db(self) -> bool:
+        return self.filename == ':memory:'
+
+    def write_to_disk(self, filename: str):
+        if self.is_memory_db():
+            _new_connection = sqlite3.connect(filename)
+            self._connection.backup(_new_connection)
+            self._connection.close()
+            self._connection = _new_connection
+            self._filename = filename
