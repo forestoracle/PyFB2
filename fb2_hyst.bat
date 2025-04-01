@@ -1,1 +1,0 @@
-.\venv\Scripts\python.exe fb2tools.py --debug hyst --subaction=createdb

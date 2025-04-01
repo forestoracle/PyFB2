@@ -1,0 +1,1 @@
+﻿raise NotImplementedError("This is a library only")
