@@ -5,7 +5,7 @@ import os
 
 
 class HystDB:
-    """ Класс для работы с БД Hyst """
+    """ Класс для работы с БД Hyst --- """
     def __init__(self, filename: str = None):
         """
         Создает новую БД в памяти или на диске.
