@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Lazarus Version="4.8"/>
+  <Compiler Value="C:\app\lazarus\fpc\3.2.2\bin\x86_64-win64\fpc.exe" Date="1556502373"/>
+  <Params Value="-MObjFPC -Sg -O1 -g -gl -l -vewnhibq -FuC:\projects\dev\python\pyFB2\pas\ -FuC:\app\lazarus\packager\units\x86_64-win64 -FuC:\app\lazarus\components\lazutils\lib\x86_64-win64 -FuC:\app\lazarus\components\freetype\lib\x86_64-win64 -FuC:\app\lazarus\lcl\units\x86_64-win64 -FuC:\app\lazarus\lcl\units\x86_64-win64\win32 -FuC:\app\lazarus\components\cairocanvas\lib\x86_64-win64\win32 -FuC:\app\lazarus\components\printers\lib\x86_64-win64\win32 -FuC:\projects\dev\FreePascal\components\HtmlViewer\package\lib\x86_64-win64 -FUC:\projects\dev\python\pyFB2\pas\lib\x86_64-win64\ -dLCL -dLCLwin32 pyfb2viewer.pas"/>
+</CONFIG>

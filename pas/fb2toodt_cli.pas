@@ -1,0 +1,58 @@
+{ CLI для fb2_to_odt — аналог main() из fb2_to_odt.py.
+
+  Использование:
+      fb2toodt_cli <файл.fb2> [выход.odt] }
+
+program fb2toodt_cli;
+
+{$mode objfpc}{$H+}
+{$codepage utf8}
+
+uses
+  Classes, SysUtils
+  {$IFDEF WINDOWS}, Windows{$ENDIF}
+  , fb2_structures, fb2_to_odt, fb2_errors;
+
+procedure SetupConsole;
+begin
+  {$IFDEF WINDOWS}
+  SetConsoleOutputCP(65001);
+  {$ENDIF}
+end;
+
+var
+  Source, Output, Path: UnicodeString;
+  C: TFb2ToOdtConverter;
+begin
+  SetupConsole;
+  if ParamCount < 1 then
+  begin
+    WriteLn(ErrOutput, 'Использование: fb2toodt_cli <файл.fb2> [выход.odt]');
+    Halt(2);
+  end;
+  Source := ParamStr(1);
+  if ParamCount > 1 then
+    Output := ParamStr(2)
+  else
+    Output := ChangeFileExt(Source, '.odt');
+
+  C := TFb2ToOdtConverter.Create;
+  try
+    try
+      Path := C.Write(Source, Output);
+    except
+      on E: Exception do
+      begin
+        WriteLn(ErrOutput, 'Ошибка: ', E.Message);
+        Halt(1);
+      end;
+    end;
+    WriteLn('ODT: ', Path);
+    if C.Book <> nil then
+      WriteLn('Изображений: ', C.Book.Images.Count)
+    else
+      WriteLn('Изображений: 0');
+  finally
+    C.Free;
+  end;
+end.

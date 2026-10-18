@@ -1,0 +1,105 @@
+[build-system]
+requires = ["setuptools >= 61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyFB2"
+# Версия берётся из pyFB2/__init__.py (единый источник).
+dynamic = ["version"]
+description = "Package for processing FB2 books"
+readme = { text = "pyFB2 — обработка книг FB2 (FictionBook 2.0): разбор, валидация по XSD, нормализация/авто-исправление и конвертация в EPUB, DOCX, ODT, MOBI, FB3, Markdown, HTML, TXT и PDF (и обратно).", content-type = "text/markdown" }
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+authors = [{ name = "pyFB2 contributors" }]
+keywords = ["fb2", "fictionbook", "fb3", "epub", "docx", "odt", "mobi", "kindle", "markdown", "html", "txt", "pdf", "zip", "normalize", "ebook"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing :: Markup :: XML",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = ["lxml >= 4.9"]
+
+[project.optional-dependencies]
+pdf = ["reportlab", "pypdf"]
+wiki = ["requests", "beautifulsoup4", "markdownify"]
+all = ["lxml >= 4.9", "reportlab", "pypdf", "requests", "beautifulsoup4", "markdownify"]
+dev = ["pytest", "ruff", "mypy"]
+
+[project.urls]
+Homepage = "https://github.com/example/pyFB2"
+Documentation = "https://github.com/example/pyFB2/tree/main/doc"
+
+[project.scripts]
+pyfb2 = "pyFB2.fb2tools:main"
+pyfb2-parse = "pyFB2.fb2_parser:main"
+pyfb2-validate = "pyFB2.fb2_validator:main"
+pyfb2-index = "pyFB2.fb2_index:main"
+pyfb2-transcode = "pyFB2.fb2_transcoder:main"
+pyfb2-zip = "pyFB2.fb2_zip:main"
+pyfb2-unzip = "pyFB2.fb2_unzip:main"
+pyfb2-to-epub = "pyFB2.fb2_to_epub:main"
+pyfb2-to-docx = "pyFB2.fb2_to_docx:main"
+pyfb2-to-md = "pyFB2.fb2_to_markdown:main"
+pyfb2-to-html = "pyFB2.fb2_to_html:main"
+pyfb2-to-pdf = "pyFB2.fb2_to_pdf:main"
+pyfb2-to-txt = "pyFB2.fb2_to_txt:main"
+pyfb2-normalize = "pyFB2.fb2_normalizer:main"
+pyfb2-rewrite = "pyFB2.fb2_rewrite:main"
+pyfb2-split = "pyFB2.fb2_split_merge:split_main"
+pyfb2-merge = "pyFB2.fb2_split_merge:merge_main"
+pyfb2-fetch = "pyFB2.fb2_web_metadata:main"
+pyfb2-epub2fb2 = "pyFB2.epub_to_fb2:main"
+pyfb2-docx2fb2 = "pyFB2.docx_to_fb2:main"
+pyfb2-md2fb2 = "pyFB2.markdown_to_fb2:main"
+pyfb2-html2fb2 = "pyFB2.html_to_fb2:main"
+pyfb2-to-odt = "pyFB2.fb2_to_odt:main"
+pyfb2-odt2fb2 = "pyFB2.odt_to_fb2:main"
+pyfb2-to-mobi = "pyFB2.fb2_to_mobi:main"
+pyfb2-mobi2fb2 = "pyFB2.mobi_to_fb2:main"
+pyfb2-to-fb3 = "pyFB2.fb2_to_fb3:main"
+pyfb2-fb32fb2 = "pyFB2.fb3_to_fb2:main"
+pyfb2-pdf2fb2 = "pyFB2.pdf_to_fb2:main"
+pyfb2-wiki = "pyFB2.fb2_wiki:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["pyFB2*"]
+exclude = ["pyFB2.resources"]
+namespaces = true
+
+[tool.setuptools.dynamic]
+version = { attr = "pyFB2.__version__" }
+
+[tool.setuptools.package-data]
+pyFB2 = ["resources/*", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["build", "pyFB2.egg-info"]
+
+[tool.ruff.lint]
+# Базовый набор: реальные ошибки (синтаксис, неиспользуемые импорты/имена).
+# Стилистические правила (UP/DTZ и т. п.) намеренно не включены.
+select = ["E4", "E7", "E9", "F"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["pyFB2"]
+# У внешних библиотек нет заглушек (reportlab, requests, bs4, markdownify).
+ignore_missing_imports = true
+# Базовый уровень строгости: проверяем тела функций и очевидные ошибки типов.
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_configs = true
+show_error_codes = true
+pretty = false
+
