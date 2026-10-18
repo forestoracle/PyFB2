@@ -1,0 +1,21 @@
+# Нормализация переводов строк: в репозитории — LF.
+* text=auto eol=lf
+
+# Windows-скрипты должны оставаться в CRLF.
+*.bat text eol=crlf
+
+# Двоичные форматы не нормализуем.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.bmp binary
+*.ico binary
+*.exe binary
+*.zip binary
+*.epub binary
+*.docx binary
+*.pdf binary
+*.db binary
+*.fb2 binary
