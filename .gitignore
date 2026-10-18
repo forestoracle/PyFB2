@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Виртуальные окружения
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+
+# Кэши инструментов
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Проектные артефакты
+*.db
+*.exe
+stats.txt
+
+# Артефакты сборки FreePascal / Lazarus-пакета
+pas/*.ppu
+pas/*.o
+pas/*.a
+pas/lib/
+packagefiles.xml
+
+# Локальные книги для ручных проверок
+/test.fb2
