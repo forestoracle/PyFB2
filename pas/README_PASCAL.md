@@ -163,7 +163,10 @@ fb2html_cli test_book.fb2 book.html images
 - `fb2viewertoolbar.pas` (`TFb2ViewerToolbar`) — панель читалки: история
   (назад/вперёд), размер шрифта, поиск, копирование, печать и предпросмотр.
 - `fb2statusbar.pas` (`TFb2StatusBar`) — статус-бар: книга, текущая глава,
-  «N из M», прогресс чтения.
+  «N из M», полоса прогресса (загрузка книги, затем прогресс чтения).
+  Прогресс загрузки: `TFb2ToHtmlConverter.OnProgress` (0..100),
+  `TFb2Viewer.OnLoadProgress` / `AddLoadProgressListener` (этапы
+  `TFb2LoadStage`); подписчиков может быть несколько.
 - `fb2metadatapanel.pas` (`TFb2MetadataPanel`) — карточка книги: просмотр и
   правка `<description>` с записью обратно в FB2 через `fb2_writer`.
 - `fb2renamelist.pas` (`TFb2RenameList`) — предпросмотр переименования «было →

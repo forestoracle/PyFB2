@@ -1,13 +1,14 @@
 unit fb2statusbar;
-{ Статус-бар читалки: книга, текущая глава, номер главы и прогресс чтения.
+{ Статус-бар читалки: книга, текущая глава, номер главы и полоса прогресса.
 
   Подключается к TFb2Viewer так же, как дерево заголовков: подписывается на
   загрузку документа и на изменение прокрутки, поэтому значения обновляются и
   при ручном чтении, и при переходе по внутренним ссылкам.
 
   Панели (слева направо): книга («Название — Автор»), текущая глава,
-  «глава N из M», прогресс чтения в процентах. Любую панель можно выключить
-  свойствами ShowBook/ShowChapter/ShowCounter/ShowProgress.
+  «глава N из M», полоса прогресса. Во время загрузки книги полоса показывает
+  прогресс загрузки (0..100 %), после — прогресс чтения. Любую панель можно
+  выключить свойствами ShowBook/ShowChapter/ShowCounter/ShowProgress.
 
   Пример:
       S := TFb2StatusBar.Create(Self);
@@ -23,7 +24,8 @@ unit fb2statusbar;
 interface
 
 uses
-  Classes, SysUtils, ComCtrls, Controls, fb2_structures, fb2_html, fb2viewer;
+  Classes, SysUtils, Graphics, Types, ComCtrls, Controls,
+  fb2_structures, fb2_html, fb2viewer;
 
 type
   { Статус-бар, привязанный к TFb2Viewer. }
@@ -36,6 +38,8 @@ type
     FShowChapter: Boolean;
     FShowCounter: Boolean;
     FShowProgress: Boolean;
+    FLoading: Boolean;          { идёт загрузка книги — панель показывает её прогресс }
+    FLoadPercent: Integer;
 
     procedure SetViewer(const Value: TFb2Viewer);
     procedure SetShowBook(const Value: Boolean);
@@ -44,8 +48,14 @@ type
     procedure SetShowProgress(const Value: Boolean);
     procedure ViewerDocumentLoad(Sender: TObject);
     procedure ViewerScroll(Sender: TObject);
+    procedure ViewerLoadProgress(Sender: TObject; Stage: TFb2LoadStage;
+      Percent: Integer);
     procedure LayoutPanels;
     procedure SetPanel(Index: Integer; const AText: UnicodeString);
+    procedure DrawProgressBar(const Rect: TRect);
+    procedure InvalidateProgress;
+    function ReadingProgressPercent: Integer;
+    function ProgressPercent: Integer;
     function BookCaption(Desc: TDescription): UnicodeString;
     function ChapterCaption(Conv: TFb2ToHtmlConverter; Idx: Integer): UnicodeString;
     function ProgressCaption: UnicodeString;
@@ -54,8 +64,12 @@ type
     destructor Destroy; override;
     { Обновить содержимое панелей. }
     procedure Refresh;
+    { Идёт загрузка книги (в панели прогресса — индикатор загрузки). }
+    property Loading: Boolean read FLoading;
   protected
     procedure Resize; override;
+    { Полоса прогресса в последней панели (psOwnerDraw). }
+    procedure DrawPanel(Panel: TStatusPanel; const Rect: TRect); override;
   published
     { Связанный просмотрщик: панели обновляются при загрузке книги и при
       изменении позиции чтения. }
@@ -104,6 +118,8 @@ begin
   FShowChapter := True;
   FShowCounter := True;
   FShowProgress := True;
+  FLoading := False;
+  FLoadPercent := 0;
   LayoutPanels;
   Refresh;
 end;
@@ -121,12 +137,16 @@ begin
   if FViewer <> nil then
   begin
     FViewer.RemoveDocumentLoadListener(@ViewerDocumentLoad);
+    FViewer.RemoveLoadProgressListener(@ViewerLoadProgress);
     FViewer.RemoveScrollListener(@ViewerScroll);
   end;
   FViewer := Value;
+  FLoading := False;
+  FLoadPercent := 0;
   if FViewer <> nil then
   begin
     FViewer.AddDocumentLoadListener(@ViewerDocumentLoad);
+    FViewer.AddLoadProgressListener(@ViewerLoadProgress);
     FViewer.AddScrollListener(@ViewerScroll);
   end;
   Refresh;
@@ -178,6 +198,36 @@ begin
   Refresh;
 end;
 
+{ Прогресс загрузки: панель прогресса на время загрузки показывает её процент,
+  затем снова — прогресс чтения. }
+procedure TFb2StatusBar.ViewerLoadProgress(Sender: TObject;
+  Stage: TFb2LoadStage; Percent: Integer);
+begin
+  if (Stage = lsDone) or (Stage = lsFailed) then
+  begin
+    FLoading := False;
+    FLoadPercent := 0;
+    Refresh;
+  end
+  else
+  begin
+    FLoading := True;
+    FLoadPercent := Percent;
+  end;
+  InvalidateProgress;
+end;
+
+procedure TFb2StatusBar.InvalidateProgress;
+begin
+  if FShowProgress and HandleAllocated then
+  begin
+    Invalidate;
+    { Перерисовать немедленно: загрузка идёт в этом же потоке, и без Update
+      полоса обновилась бы только после её окончания. }
+    Update;
+  end;
+end;
+
 procedure TFb2StatusBar.Resize;
 begin
   inherited Resize;
@@ -212,7 +262,7 @@ begin
   if FShowCounter then
     Inc(Fixed, 90);
   if FShowProgress then
-    Inc(Fixed, 70);
+    Inc(Fixed, 90);
   Flex := W - Fixed;
   if Flex < 0 then
     Flex := 0;
@@ -246,7 +296,10 @@ begin
     Inc(Idx);
   end;
   if FShowProgress then
-    Panels[Idx].Width := 70;
+  begin
+    Panels[Idx].Width := 90;
+    Panels[Idx].Style := psOwnerDraw;   { рисуем полосу сами }
+  end;
 end;
 
 { LCL-строки — UTF-8, а DefaultSystemCodePage может быть 1251, поэтому
@@ -303,11 +356,11 @@ begin
   Result := Entries[Idx].Title;
 end;
 
-function TFb2StatusBar.ProgressCaption: UnicodeString;
+function TFb2StatusBar.ReadingProgressPercent: Integer;
 var
   Pos, Max: Integer;
 begin
-  Result := '';
+  Result := -1;
   if FViewer = nil then
     Exit;
   Max := FViewer.Viewer.VScrollBarRange;
@@ -318,7 +371,113 @@ begin
     Pos := 0;
   if Pos > Max then
     Pos := Max;
-  Result := Format('%d %%', [Pos * 100 div Max]);
+  Result := Pos * 100 div Max;
+end;
+
+{ Что показывает панель: во время загрузки — прогресс загрузки, иначе — чтения. }
+function TFb2StatusBar.ProgressPercent: Integer;
+begin
+  if FLoading then
+    Result := FLoadPercent
+  else
+    Result := ReadingProgressPercent;
+  if Result < 0 then
+    Result := 0;
+  if Result > 100 then
+    Result := 100;
+end;
+
+function TFb2StatusBar.ProgressCaption: UnicodeString;
+begin
+  if FLoading then
+    Result := Format('%d %%', [FLoadPercent])
+  else if ReadingProgressPercent < 0 then
+    Result := ''
+  else
+    Result := Format('%d %%', [ReadingProgressPercent]);
+end;
+
+{ Owner-draw панель прогресса: дорожка + заливка + процент справа. }
+procedure TFb2StatusBar.DrawProgressBar(const Rect: TRect);
+const
+  Gap = 3;
+var
+  BarR, FillR, TextR: TRect;
+  Pct, TextW, FillW: Integer;
+  S: UnicodeString;
+  S8: UTF8String;
+  Style: TTextStyle;
+begin
+  Canvas.Brush.Style := bsSolid;
+  if Color = clDefault then
+    Canvas.Brush.Color := clBtnFace
+  else
+    Canvas.Brush.Color := Color;
+  Canvas.FillRect(Rect);
+
+  { Нет книги и нет загрузки — панель пустая (как раньше с пустым текстом). }
+  if (not FLoading) and (ReadingProgressPercent < 0) then
+    Exit;
+
+  S := ProgressCaption;
+  Canvas.Font.Assign(Font);
+  S8 := UTF8Encode(S);
+  if S8 <> '' then
+    TextW := Canvas.TextWidth(S8) + 4
+  else
+    TextW := 0;
+
+  BarR := Rect;
+  InflateRect(BarR, -Gap, -Gap);
+  if BarR.Right - BarR.Left > TextW + 8 then
+    Dec(BarR.Right, TextW + 2);
+
+  if (BarR.Right > BarR.Left) and (BarR.Bottom > BarR.Top) then
+  begin
+    Pct := ProgressPercent;
+    Canvas.Brush.Color := clBtnShadow;
+    Canvas.FillRect(BarR);
+    FillW := (BarR.Right - BarR.Left) * Pct div 100;
+    if FillW > 0 then
+    begin
+      FillR := BarR;
+      FillR.Right := FillR.Left + FillW;
+      Canvas.Brush.Color := clHighlight;
+      Canvas.FillRect(FillR);
+    end;
+    { Рамка дорожки: Rectangle при bsClear рисует только контур. }
+    Canvas.Brush.Style := bsClear;
+    Canvas.Pen.Color := clBtnShadow;
+    Canvas.Rectangle(BarR.Left, BarR.Top, BarR.Right, BarR.Bottom);
+    Canvas.Brush.Style := bsSolid;
+  end;
+
+  if S <> '' then
+  begin
+    TextR := Rect;
+    if BarR.Right > BarR.Left then
+      TextR.Left := BarR.Right + 2;
+    if TextR.Right > TextR.Left then
+    begin
+      Canvas.Brush.Style := bsClear;
+      Canvas.Font.Color := clBtnText;
+      Style := Canvas.TextStyle;
+      Style.Alignment := taCenter;
+      Style.Layout := tlCenter;
+      Style.SingleLine := True;
+      Style.Clipping := True;
+      Canvas.TextRect(TextR, TextR.Left, TextR.Top, S8, Style);
+      Canvas.Brush.Style := bsSolid;
+    end;
+  end;
+end;
+
+procedure TFb2StatusBar.DrawPanel(Panel: TStatusPanel; const Rect: TRect);
+begin
+  inherited DrawPanel(Panel, Rect);
+  if FShowProgress and (Panels.Count > 0) and (Panel.Index >= 0) and
+     (Panel.Index = Panels.Count - 1) then
+    DrawProgressBar(Rect);
 end;
 
 procedure TFb2StatusBar.Refresh;
@@ -328,6 +487,14 @@ var
 begin
   if FUpdating then
     Exit;
+  { Во время загрузки остальные панели могут обращаться к ещё не готовому
+    конвертеру/документу; обновляем только полосу прогресса. }
+  if FLoading then
+  begin
+    if FShowProgress and (Panels.Count > 0) then
+      SetPanel(Panels.Count - 1, ProgressCaption);
+    Exit;
+  end;
   FUpdating := True;
   try
     Conv := nil;

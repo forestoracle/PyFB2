@@ -43,6 +43,13 @@ uses
   HtmlGlobals, HtmlView, HTMLUn2;          { HtmlViewer 11: движок + TIDObject }
 
 type
+  { Этапы загрузки книги — для индикатора прогресса в статус-баре и т. п. }
+  TFb2LoadStage = (lsStarting, lsReading, lsParsing, lsRendering, lsImages,
+    lsLayout, lsDone, lsFailed);
+  { Уведомление о ходе загрузки: Stage — этап, Percent — 0..100. }
+  TFb2LoadProgressEvent = procedure(Sender: TObject; Stage: TFb2LoadStage;
+    Percent: Integer) of object;
+
   { Просмотр FB2: FB2 -> HTML (fb2_html) -> THtmlViewer. }
   TFb2Viewer = class(TCustomPanel)
   private
@@ -66,8 +73,14 @@ type
     FHtml: UnicodeString;
     FHtmlPath: UnicodeString;
     FOnDocumentLoad: TNotifyEvent;
+    FOnLoadProgress: TFb2LoadProgressEvent;
+    FProcessMessagesOnLoad: Boolean;
+    FLoading: Boolean;             { идёт загрузка — защита от реентерабельности }
+    FLastProgressPercent: Integer;
+    FLastPumpedPercent: Integer;
     FImgStream: TMemoryStream;
     FDocLoadListeners: TList;      { PNotifyEvent — подписчики OnDocumentLoad }
+    FLoadProgressListeners: TList; { PFb2LoadProgressEvent — подписчики прогресса }
     FScrollListeners: TList;       { PNotifyEvent — подписчики изменения прокрутки }
     FTrackTimer: TTimer;           { опрос позиции прокрутки (см. UpdateTracking) }
     FLastScrollPos: Integer;
@@ -91,6 +104,8 @@ type
       var Stream: TStream);
     procedure NotifyDocumentLoad;
     procedure NotifyScroll;
+    procedure DoLoadProgress(Stage: TFb2LoadStage; Percent: Integer);
+    procedure ConverterProgress(Sender: TObject; Percent: Integer);
     procedure UpdateTracking;
     procedure DoTrackTimer(Sender: TObject);
     procedure RefreshTocPositions;
@@ -128,6 +143,11 @@ type
       т. п.) — они не перекрывают друг друга. }
     procedure AddDocumentLoadListener(const Handler: TNotifyEvent);
     procedure RemoveDocumentLoadListener(const Handler: TNotifyEvent);
+
+    { Подписка на прогресс загрузки (начало, этапы, 0..100). Подписчиков может
+      быть несколько; статус-бар использует это для полосы загрузки. }
+    procedure AddLoadProgressListener(const Handler: TFb2LoadProgressEvent);
+    procedure RemoveLoadProgressListener(const Handler: TFb2LoadProgressEvent);
 
     { Текущее смещение вертикальной прокрутки (в пикселях документа). }
     function ScrollPosition: Integer;
@@ -197,6 +217,16 @@ type
     property CssFile: TFileName read FCssFile write SetCssFile;
     { Событие после успешной загрузки документа (для связанных компонентов). }
     property OnDocumentLoad: TNotifyEvent read FOnDocumentLoad write FOnDocumentLoad;
+    { Ход загрузки книги: этап и процент 0..100. Событие вызывается в
+      вызывающем потоке; lsDone — успешно, lsFailed — ошибка. }
+    property OnLoadProgress: TFb2LoadProgressEvent read FOnLoadProgress
+      write FOnLoadProgress;
+    { Обрабатывать сообщения между этапами загрузки (Application.ProcessMessages).
+      По умолчанию False: статус-бар перерисовывает индикатор сам через Update,
+      поэтому окно не обязано становиться реентерабельным. Включайте, если
+      нужна полная отзывчивость UI во время загрузки. }
+    property ProcessMessagesOnLoad: Boolean read FProcessMessagesOnLoad
+      write FProcessMessagesOnLoad default False;
   end;
 
 implementation
@@ -204,6 +234,8 @@ implementation
 type
   { Указатель на подписчика (для списков FDocLoadListeners/FScrollListeners). }
   PNotifyEvent = ^TNotifyEvent;
+  { Указатель на подписчика прогресса загрузки. }
+  PFb2LoadProgressEvent = ^TFb2LoadProgressEvent;
 
 { ===================== Списки подписчиков ===================== }
 
@@ -256,6 +288,61 @@ begin
     Exit;
   for I := 0 to List.Count - 1 do
     Dispose(PNotifyEvent(List[I]));
+  List.Clear;
+end;
+
+procedure LoadProgressListAddListener(List: TList;
+  const Handler: TFb2LoadProgressEvent);
+var
+  P: PFb2LoadProgressEvent;
+begin
+  if not Assigned(Handler) or (List = nil) then
+    Exit;
+  New(P);
+  P^ := Handler;
+  List.Add(P);
+end;
+
+procedure LoadProgressListRemoveListener(List: TList;
+  const Handler: TFb2LoadProgressEvent);
+var
+  I: Integer;
+  P: PFb2LoadProgressEvent;
+  H: TMethod;
+begin
+  if not Assigned(Handler) or (List = nil) then
+    Exit;
+  H := TMethod(Handler);
+  for I := List.Count - 1 downto 0 do
+  begin
+    P := PFb2LoadProgressEvent(List[I]);
+    if (TMethod(P^).Code = H.Code) and (TMethod(P^).Data = H.Data) then
+    begin
+      Dispose(P);
+      List.Delete(I);
+    end;
+  end;
+end;
+
+procedure LoadProgressListFire(List: TList; Sender: TObject;
+  Stage: TFb2LoadStage; Percent: Integer);
+var
+  I: Integer;
+begin
+  if List = nil then
+    Exit;
+  for I := 0 to List.Count - 1 do
+    PFb2LoadProgressEvent(List[I])^(Sender, Stage, Percent);
+end;
+
+procedure LoadProgressListFree(List: TList);
+var
+  I: Integer;
+begin
+  if List = nil then
+    Exit;
+  for I := 0 to List.Count - 1 do
+    Dispose(PFb2LoadProgressEvent(List[I]));
   List.Clear;
 end;
 
@@ -340,7 +427,11 @@ begin
   FViewer.OnHotSpotClick := @ViewerHotSpotClick;
   FImgStream := TMemoryStream.Create;
   FDocLoadListeners := TList.Create;
+  FLoadProgressListeners := TList.Create;
   FScrollListeners := TList.Create;
+  FProcessMessagesOnLoad := False;
+  FLastProgressPercent := -1;
+  FLastPumpedPercent := -1;
   FLastScrollPos := -1;
   FNoteBackPos := TStringList.Create;
 
@@ -357,8 +448,10 @@ begin
   if FTrackTimer <> nil then
     FTrackTimer.Enabled := False;
   ListFree(FDocLoadListeners);
+  LoadProgressListFree(FLoadProgressListeners);
   ListFree(FScrollListeners);
   FreeAndNil(FDocLoadListeners);
+  FreeAndNil(FLoadProgressListeners);
   FreeAndNil(FScrollListeners);
   FreeAndNil(FConverter);
   FreeAndNil(FImgStream);
@@ -390,6 +483,71 @@ end;
 procedure TFb2Viewer.RemoveDocumentLoadListener(const Handler: TNotifyEvent);
 begin
   ListRemoveListener(FDocLoadListeners, Handler);
+end;
+
+procedure TFb2Viewer.AddLoadProgressListener(
+  const Handler: TFb2LoadProgressEvent);
+begin
+  LoadProgressListAddListener(FLoadProgressListeners, Handler);
+end;
+
+procedure TFb2Viewer.RemoveLoadProgressListener(
+  const Handler: TFb2LoadProgressEvent);
+begin
+  LoadProgressListRemoveListener(FLoadProgressListeners, Handler);
+end;
+
+{ ===================== Прогресс загрузки ===================== }
+
+{ Разослать прогресс подписчикам. При включённом ProcessMessagesOnLoad между
+  этапами прокачиваются сообщения (по умолчанию выключено — статус-бар
+  перерисовывается сам через Update). }
+procedure TFb2Viewer.DoLoadProgress(Stage: TFb2LoadStage; Percent: Integer);
+var
+  HasSink: Boolean;
+begin
+  if Percent < 0 then
+    Percent := 0;
+  if Percent > 100 then
+    Percent := 100;
+  { Проценты внутри загрузки монотонны; lsDone/lsFailed важнее значения. }
+  if (Stage <> lsDone) and (Stage <> lsFailed) and
+     (Percent <= FLastProgressPercent) then
+    Exit;
+  FLastProgressPercent := Percent;
+
+  HasSink := Assigned(FOnLoadProgress) or
+    ((FLoadProgressListeners <> nil) and (FLoadProgressListeners.Count > 0));
+  if Assigned(FOnLoadProgress) then
+    FOnLoadProgress(Self, Stage, Percent);
+  LoadProgressListFire(FLoadProgressListeners, Self, Stage, Percent);
+
+  { Прокачиваем сообщения не на каждом проценте (иначе на большой книге
+    отрисовка секций замедлится), а с шагом ~2% и обязательно на границах. }
+  if FProcessMessagesOnLoad and HasSink and
+     ((Stage = lsStarting) or (Stage = lsDone) or (Stage = lsFailed) or
+      (Percent = 100) or (Percent >= FLastPumpedPercent + 2)) then
+  begin
+    FLastPumpedPercent := Percent;
+    Application.ProcessMessages;
+  end;
+end;
+
+{ Прогресс конвертера (0..100) занимает первые 90% загрузки: оставшиеся 10%
+  приходятся на запись HTML и раскладку в THtmlViewer. }
+procedure TFb2Viewer.ConverterProgress(Sender: TObject; Percent: Integer);
+var
+  Stage: TFb2LoadStage;
+begin
+  if not FLoading then
+    Exit;
+  if Percent < 45 then
+    Stage := lsParsing
+  else if Percent < 80 then
+    Stage := lsRendering
+  else
+    Stage := lsImages;
+  DoLoadProgress(Stage, Percent * 90 div 100);
 end;
 
 { ===================== Прокрутка ===================== }
@@ -557,6 +715,10 @@ begin
   { Имя файла приходит в кодировке LCL (UTF-8), а RTL/конвертер работают с
     системной кодировкой — конвертируем явно, иначе кириллические пути
     («книга.fb2») не откроются. }
+  { Application.ProcessMessages между этапами может привести сюда повторно
+    (пользователь успел выбрать другую книгу) — текущая загрузка главнее. }
+  if FLoading then
+    Exit;
   if not FileExists(UTF8ToSys(AFileName)) then
     raise Exception.CreateFmt('FB2 не найден: %s', [AFileName]);
 
@@ -565,25 +727,46 @@ begin
   FFileName := AFileName;
   FNoteBackPos.Clear;
 
-  FreeAndNil(FConverter);
-  FConverter := TFb2ToHtmlConverter.Create(nil, FImageDir, FHeadingOffset,
-    FMaxHeadingLevel, FIncludeToc, FTocTitle, FIncludeAnnotation,
-    FIncludeEpigraphs, FIncludeCover, FInlineImages, FNoteLinks, EffectiveCss);
-  Inc(FDocumentSerial);
-  { Выгружаем на диск только те картинки, что реально попали в HTML: иначе
-    книги с большим числом неиспользуемых <binary> (например, «Дон Кихот» —
-    525 штук) заваливают временный каталог на десятки мегабайт. }
-  FConverter.OnlyUsedImages := True;
+  FLoading := True;
+  FLastProgressPercent := -1;
+  FLastPumpedPercent := -1;
+  try
+    try
+      DoLoadProgress(lsStarting, 0);
 
-  FHtml := FConverter.Convert(UTF8ToString(AFileName));  { HTML + TocEntries }
-  FHtmlPath := IncludeTrailingPathDelimiter(FTempDir) + 'book.html';
-  WriteUtf8File(FHtmlPath, FHtml);                 { HTML на диск (база картинок) }
-  FConverter.SaveImages(FTempDir);                 { картинки в FTempDir\ImageDir }
+      FreeAndNil(FConverter);
+      FConverter := TFb2ToHtmlConverter.Create(nil, FImageDir, FHeadingOffset,
+        FMaxHeadingLevel, FIncludeToc, FTocTitle, FIncludeAnnotation,
+        FIncludeEpigraphs, FIncludeCover, FInlineImages, FNoteLinks, EffectiveCss);
+      Inc(FDocumentSerial);
+      { Выгружаем на диск только те картинки, что реально попали в HTML: иначе
+        книги с большим числом неиспользуемых <binary> (например, «Дон Кихот» —
+        525 штук) заваливают временный каталог на десятки мегабайт. }
+      FConverter.OnlyUsedImages := True;
+      FConverter.OnProgress := @ConverterProgress;
 
-  { Reference = путь к book.html: HtmlViewer возьмёт кодировку из
-    meta charset и разрешит относительные img src="images/…". }
-  FViewer.OnImageRequest := nil;
-  FViewer.LoadFromString(FHtml, FHtmlPath);
+      DoLoadProgress(lsReading, 5);
+      FHtml := FConverter.Convert(UTF8ToString(AFileName));  { HTML + TocEntries }
+      FHtmlPath := IncludeTrailingPathDelimiter(FTempDir) + 'book.html';
+      WriteUtf8File(FHtmlPath, FHtml);               { HTML на диск (база картинок) }
+      FConverter.SaveImages(FTempDir);               { картинки в FTempDir\ImageDir }
+
+      { Reference = путь к book.html: HtmlViewer возьмёт кодировку из
+        meta charset и разрешит относительные img src="images/…". }
+      DoLoadProgress(lsLayout, 95);
+      FViewer.OnImageRequest := nil;
+      FViewer.LoadFromString(FHtml, FHtmlPath);
+
+      DoLoadProgress(lsDone, 100);
+    except
+      DoLoadProgress(lsFailed, 0);
+      raise;
+    end;
+  finally
+    if FConverter <> nil then
+      FConverter.OnProgress := nil;
+    FLoading := False;
+  end;
 
   NotifyDocumentLoad;
 end;
@@ -591,22 +774,46 @@ end;
 procedure TFb2Viewer.LoadFromStream(AStream: TStream);
 begin
   { Без временного каталога: HTML держим в памяти, картинки — из binary. }
+  if FLoading then
+    Exit;
+
   ClearTempDir;
   FTempDir := '';
   FFileName := '';
   FHtmlPath := '';
   FNoteBackPos.Clear;
 
-  FreeAndNil(FConverter);
-  FConverter := TFb2ToHtmlConverter.Create(nil, FImageDir, FHeadingOffset,
-    FMaxHeadingLevel, FIncludeToc, FTocTitle, FIncludeAnnotation,
-    FIncludeEpigraphs, FIncludeCover, FInlineImages, FNoteLinks, EffectiveCss);
-  Inc(FDocumentSerial);
+  FLoading := True;
+  FLastProgressPercent := -1;
+  FLastPumpedPercent := -1;
+  try
+    try
+      DoLoadProgress(lsStarting, 0);
 
-  FHtml := FConverter.ConvertStream(AStream);     { HTML-строка + TocEntries }
+      FreeAndNil(FConverter);
+      FConverter := TFb2ToHtmlConverter.Create(nil, FImageDir, FHeadingOffset,
+        FMaxHeadingLevel, FIncludeToc, FTocTitle, FIncludeAnnotation,
+        FIncludeEpigraphs, FIncludeCover, FInlineImages, FNoteLinks, EffectiveCss);
+      Inc(FDocumentSerial);
+      FConverter.OnProgress := @ConverterProgress;
 
-  FViewer.OnImageRequest := @ViewerImageRequest;  { картинки отдаём из памяти }
-  FViewer.LoadFromString(FHtml, '');
+      DoLoadProgress(lsReading, 5);
+      FHtml := FConverter.ConvertStream(AStream);    { HTML-строка + TocEntries }
+
+      DoLoadProgress(lsLayout, 95);
+      FViewer.OnImageRequest := @ViewerImageRequest; { картинки отдаём из памяти }
+      FViewer.LoadFromString(FHtml, '');
+
+      DoLoadProgress(lsDone, 100);
+    except
+      DoLoadProgress(lsFailed, 0);
+      raise;
+    end;
+  finally
+    if FConverter <> nil then
+      FConverter.OnProgress := nil;
+    FLoading := False;
+  end;
 
   NotifyDocumentLoad;
 end;
@@ -707,6 +914,9 @@ end;
 
 procedure TFb2Viewer.ReRender;
 begin
+  { Во время загрузки документ ещё не готов — перерисовывать нечего. }
+  if FLoading then
+    Exit;
   if FHtml = '' then
     Exit;
   if FFileName <> '' then
@@ -727,6 +937,10 @@ end;
 procedure TFb2Viewer.SetFileName(const Value: TFileName);
 begin
   if Value = FFileName then
+    Exit;
+  { Идёт загрузка (внутри могли прокачать сообщения) — не меняем FileName,
+    иначе он разойдётся с фактически загруженным документом. }
+  if FLoading then
     Exit;
   FFileName := Value;
   if (Value <> '') and FileExists(UTF8ToSys(Value)) then
@@ -752,6 +966,10 @@ procedure TFb2Viewer.CssChanged;
 var
   SavePos: Integer;
 begin
+  { Идёт загрузка: конвертер может быть заполнен наполовину. Новое значение
+    Css уже сохранено в FCss и применится при следующей пересборке. }
+  if FLoading then
+    Exit;
   if (FConverter = nil) or (FHtml = '') then
     Exit;   { книги ещё нет — значение применится при загрузке }
   SavePos := FViewer.VScrollBarPosition;

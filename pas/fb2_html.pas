@@ -115,6 +115,10 @@ type
     destructor Destroy; override;
   end;
 
+  { Прогресс разбора/сборки HTML: 0..100. Этапы внутри одной конвертации
+    монотонны, поэтому по нему можно рисовать индикатор загрузки. }
+  TFb2HtmlProgressEvent = procedure(Sender: TObject; Percent: Integer) of object;
+
   { Преобразование разобранного FB2 в HTML + выгрузка картинок. }
   TFb2ToHtmlConverter = class
   private
@@ -146,7 +150,14 @@ type
     FNoteRefBlock: TStringList;    { id сноски -> блочный якорь её первой ссылки }
     FPendingNoteRefs: TStringList; { id сносок, чьи первые ссылки в текущем блоке }
     FParCounter: Integer;          { счётчик блочных якорей для сносок }
+    FOnProgress: TFb2HtmlProgressEvent;
+    FProgressPercent: Integer;     { последний отданный процент (-1 — сброс) }
+    FRenderDone: Integer;          { отрисовано секций в текущем BuildHtml }
+    FRenderTotal: Integer;         { всего секций (0 — прогресс не нужен) }
 
+    procedure DoProgress(Percent: Integer);
+    function CountSections(Sections: TFb2ObjectList): Integer;
+    function CountAllSections: Integer;
     procedure Prepare(const SourceFile: UnicodeString);
     procedure PrepareFromStream(AStream: TStream);
     procedure ParseLoaded;
@@ -238,6 +249,11 @@ type
       DEFAULT_CSS). Можно менять после Convert/ConvertStream и вызывать
       RenderHtml — оформление сменится без повторного разбора FB2. }
     property Css: UnicodeString read FCss write FCss;
+
+    { Уведомление о ходе Convert/Write/SaveImages (0..100). Вызывается в
+      вызывающем потоке; GUI-обёртка использует его для индикатора загрузки.
+      При повторной конвертации счёт начинается с 0. }
+    property OnProgress: TFb2HtmlProgressEvent read FOnProgress write FOnProgress;
 
     property Parser: TFb2Parser read FParser;
     property Description: TDescription read FDescription;
@@ -573,6 +589,46 @@ begin
   inherited Destroy;
 end;
 
+{ ===================== Прогресс ===================== }
+
+procedure TFb2ToHtmlConverter.DoProgress(Percent: Integer);
+begin
+  if Percent < 0 then
+    Percent := 0;
+  if Percent > 100 then
+    Percent := 100;
+  if Percent <= FProgressPercent then
+    Exit;
+  FProgressPercent := Percent;
+  if Assigned(FOnProgress) then
+    FOnProgress(Self, Percent);
+end;
+
+function TFb2ToHtmlConverter.CountSections(Sections: TFb2ObjectList): Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  if Sections = nil then
+    Exit;
+  for I := 0 to Sections.Count - 1 do
+  begin
+    Inc(Result);
+    Result := Result + CountSections(TSection(Sections[I]).Sections);
+  end;
+end;
+
+function TFb2ToHtmlConverter.CountAllSections: Integer;
+var
+  I: Integer;
+begin
+  Result := 0;
+  if FBodies = nil then
+    Exit;
+  for I := 0 to FBodies.Count - 1 do
+    Result := Result + CountSections(TBody(FBodies[I]).Sections);
+end;
+
 { ===================== Публичный API ===================== }
 
 procedure TFb2ToHtmlConverter.ParseLoaded;
@@ -600,8 +656,12 @@ begin
   FPendingNoteRefs.Clear;
   FParCounter := 0;
 
+  FProgressPercent := -1;
+  DoProgress(0);
   FParser.LoadFile(SourceFile);
+  DoProgress(40);
   ParseLoaded;
+  DoProgress(50);
 end;
 
 procedure TFb2ToHtmlConverter.PrepareFromStream(AStream: TStream);
@@ -615,20 +675,26 @@ begin
   FPendingNoteRefs.Clear;
   FParCounter := 0;
 
+  FProgressPercent := -1;
+  DoProgress(0);
   FParser.LoadStream(AStream);
+  DoProgress(40);
   ParseLoaded;
+  DoProgress(50);
 end;
 
 function TFb2ToHtmlConverter.Convert(const SourceFile: UnicodeString): UnicodeString;
 begin
   Prepare(SourceFile);
   Result := BuildHtml;
+  DoProgress(80);
 end;
 
 function TFb2ToHtmlConverter.ConvertStream(AStream: TStream): UnicodeString;
 begin
   PrepareFromStream(AStream);
   Result := BuildHtml;
+  DoProgress(80);
 end;
 
 function TFb2ToHtmlConverter.RenderHtml: UnicodeString;
@@ -644,7 +710,10 @@ begin
   FNoteRefBlock.Clear;
   FPendingNoteRefs.Clear;
   FParCounter := 0;
+  FProgressPercent := -1;
+  DoProgress(0);
   Result := BuildHtml;
+  DoProgress(100);
 end;
 
 function TFb2ToHtmlConverter.Write(const SourceFile,
@@ -716,7 +785,10 @@ var
 begin
   Result := TTextList.Create;
   if (FBinaries = nil) or (FBinaries.Count = 0) then
+  begin
+    DoProgress(100);
     Exit;
+  end;
 
   if FImageDir <> '' then
   begin
@@ -735,20 +807,21 @@ begin
   begin
     Binary := TBinary(FBinaries[I]);
     Filename := FImageFiles.Values[Binary.Id];
-    if Filename = '' then
-      Continue;
-    if FOnlyUsedImages and (FUsedImages.IndexOf(Filename) < 0) then
-      Continue;   { картинка не попала в HTML — не выгружаем }
-    Path := IncludeTrailingPathDelimiter(TargetDir) + Filename;
-    Data := FParser.BinaryData(Binary);
-    FS := TFileStream.Create(Path, fmCreate);
-    try
-      if Length(Data) > 0 then
-        FS.WriteBuffer(Data[0], Length(Data));
-    finally
-      FS.Free;
+    if (Filename <> '') and
+       (not (FOnlyUsedImages and (FUsedImages.IndexOf(Filename) < 0))) then
+    begin
+      Path := IncludeTrailingPathDelimiter(TargetDir) + Filename;
+      Data := FParser.BinaryData(Binary);
+      FS := TFileStream.Create(Path, fmCreate);
+      try
+        if Length(Data) > 0 then
+          FS.WriteBuffer(Data[0], Length(Data));
+      finally
+        FS.Free;
+      end;
+      Result.Add(Path);
     end;
-    Result.Add(Path);
+    DoProgress(80 + (I + 1) * 20 div FBinaries.Count);
   end;
 end;
 
@@ -852,7 +925,14 @@ begin
   FTocEntries.Clear;
   FNoteRefCounters.Clear;
 
+  FRenderDone := 0;
+  FRenderTotal := 0;
+  if Assigned(FOnProgress) then
+    FRenderTotal := CountAllSections;
+  DoProgress(50);
+
   Content := RenderBodies;
+  DoProgress(75);
 
   TocHtml := '';
   if FIncludeToc then
@@ -879,6 +959,7 @@ begin
   finally
     Parts.Free;
   end;
+  DoProgress(80);
 end;
 
 function TFb2ToHtmlConverter.HtmlHead: UnicodeString;
@@ -1201,6 +1282,11 @@ begin
 
     Parts.Add('</section>');
     Result := JoinNonEmpty(Parts, #10);
+    if FRenderTotal > 0 then
+    begin
+      Inc(FRenderDone);
+      DoProgress(50 + FRenderDone * 25 div FRenderTotal);
+    end;
   finally
     Parts.Free;
   end;
