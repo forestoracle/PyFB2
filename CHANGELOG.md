@@ -5,6 +5,54 @@
 
 ## [Unreleased]
 
+### Добавлено
+- **Набор иконок для панели читалки** — `pas/icons/`: 10 монохромных иконок
+  (PNG 16/24/32/48/64 px, прозрачный фон) для команд `TFb2ViewerToolbar`
+  (`arrow-left`, `arrow-right`, `arrow-up`, `zoom-out`, `zoom-in`,
+  `arrow-counterclockwise`, `search`, `chevron-down`, `clipboard`, `printer`).
+  Источник — **Bootstrap Icons** (MIT, текст лицензии в
+  `pas/icons/LICENSE-bootstrap-icons.txt`). Там же `pas/icons/README.md`
+  (таблица «команда → иконка», пример загрузки в `TImageList`) и
+  `pas/icons/tools/svg2png.py` для перегенерации из SVG (учтены
+  `currentColor` и `viewBox` Bootstrap Icons).
+- **Слежение дерева файлов за читалкой**: у `TFb2FileTreeView`
+  (`pas/fb2filetreeview.pas`) новое свойство `FollowViewer` (по умолчанию
+  `True`) — при открытии книги в связанном `TFb2Viewer` дерево само переходит
+  в каталог файла и выделяет его (в т. ч. через несколько уровней вложенности),
+  а парный `TFb2FileListView` показывает этот каталог. Реализовано подпиской на
+  `AddDocumentLoadListener` с фильтром по `DocumentSerial` (повторные события
+  того же документа не срабатывают), защитой от рекурсии «выделение → открытие
+  → выделение» и пропуском повторного выбора уже выделенного файла; добавлен
+  публичный метод `FollowFile(FileName)`. Проверено GUI-тестом на трёх
+  каталогах (18 проверок).
+- **Просмотр PDF в Lazarus** (`pas/fb2pdfview.pas`, компонент `TFb2PdfView`;
+  отдельный пакет `pas/pyfb2pdfview.lpk`, вкладка «FB2»): постраничный просмотр
+  на движке **pdfium** через PdfiumPascal (`TPdfPageViewControl`) и PdfiumLib
+  (MPL-2.0; `pdfium.dll` — BSD-3-Clause). Возможности: режимы масштаба
+  (`smFitAuto`/`smFitWidth`/`smFitHeight`/`smZoom`, `ZoomIn`/`ZoomOut`/
+  `ZoomReset`), поворот, подсветка поиска по текущей странице, формы и внешние
+  ссылки, пароль, JSON-сессия чтения (файл/страница/масштаб/поворот), подписки
+  на загрузку документа и смену страницы (как у `TFb2Viewer`). Ошибки открытия
+  не выбрасывают исключений — `LastError`/`OnLoadError`; вложенный контрол
+  движка создаётся лениво, поэтому компонент ставится на форму и без
+  `pdfium.dll`. Доступны `Document` (`TPdfDocument`) и `Viewer`
+  (`TPdfPageViewControl`).
+- **Оглавление и миниатюры PDF**: встроенный сайдбар `TFb2PdfView`
+  (`ShowOutline`, `ShowThumbnails`, `SidebarWidth`, `SidebarPosition` — вкладки
+  «Содержание» и «Миниатюры», сторона `spLeft`/`spRight`, сплиттер) плюс
+  отдельные компоненты `TFb2PdfOutline`
+  (`pas/fb2pdfoutline.pas` — дерево закладок с подсветкой текущего раздела) и
+  `TFb2PdfThumbnails` (`pas/fb2pdfthumbnails.pas` — лента миниатюр, вертикальная
+  или горизонтальная). Чтение закладок — новый модуль `pas/fb2pdfbookmarks.pas`
+  (обход `FPDFBookmark_*`/`FPDFDest_GetDestPageIndex`, UTF-16LE заголовки,
+  внешние ссылки). Клик по закладке/миниатюре переходит на страницу, смена
+  страницы подсвечивает раздел и прокручивает ленту. Оба компонента
+  зарегистрированы в палитре «FB2».
+- `pas/README_PASCAL.md`: раздел об установке компонентов PDF (клонирование
+  PdfiumLib/PdfiumPascal в `pas/thirdparty`), об их API и ограничениях, а также
+  уточнение: `fb2_to_pdf` в FPC реализуем штатным `fcl-pdf` (`fppdf`) —
+  внешний движок нужен только для **чтения** PDF.
+
 ### Исправлено
 - **FB2 → DOCX/EPUB/HTML/MOBI/ODT**: заголовок `<title>`, состоящий из
   нескольких `<p>` (разные строки), больше не склеивается без разделителя —
@@ -43,6 +91,16 @@
 
 
 ### Добавлено
+- **Нормализация и пересборка: пространство имён FB2 приводится к 2.0.**
+  Файлы с `http://www.gribuser.ru/xml/fictionbook/2.1` (и другими версиями
+  в URI) раньше не проходили XSD-валидацию («No matching global declaration
+  available for the validation root»), а `rewrite` падал с «В документе
+  отсутствует элемент `<description>`». Теперь `Fb2Normalizer` заменяет
+  объявления `xmlns` на 2.0 и сообщает правку `[namespace-fixed]`
+  (`doc/fb2_normalizer.md`), а `Fb2Rewriter` читает такие файлы и записывает
+  результат уже в пространстве 2.0 (`doc/fb2_rewrite.md`). Общая логика —
+  новый модуль `fb2_namespaces.py` (`normalize_namespace_uri`,
+  `normalize_namespace_declarations`, `normalize_tree_namespaces`).
 - **GUI: прогресс загрузки больших книг.** `TFb2ToHtmlConverter.OnProgress`
   отдаёт 0..100 по этапам (чтение/разбор XML, отрисовка секций, выгрузка
   картинок); `TFb2Viewer.OnLoadProgress` / `AddLoadProgressListener` сообщают
@@ -51,6 +109,13 @@
   рисует как полосу прогресса: во время загрузки — прогресс загрузки, после —
   прогресс чтения; панель обновляется через `Invalidate`+`Update`, поэтому
   видна и при синхронной загрузке в главном потоке.
+- **GUI: JSON-сессия чтения `TFb2Viewer`.** `SaveSessionToFile` /
+  `LoadSessionFromFile` сохраняют и восстанавливают имя файла и позицию чтения
+  (UTF-8 без BOM); `SessionToJson` / `ApplySession` делают то же со строкой
+  JSON. Кроме абсолютной позиции и процента сохраняется якорь текущей главы со
+  смещением, поэтому позиция корректно восстанавливается при изменившейся
+  раскладке; если `VScrollBarRange` ещё не готов, восстановление отложенное
+  (до ~10 секунд), а ручной переход его отменяет.
 
 - **Архивы FB2** — новые модули `fb2_zip.py` (`FB2Zip`) и `fb2_unzip.py`
   (`FB2Unzip`), включённые в пакет: упаковка книг в «однокнижные» ZIP-архивы

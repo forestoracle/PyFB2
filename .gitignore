@@ -33,6 +33,8 @@ pas/*.o
 pas/*.a
 pas/lib/
 packagefiles.xml
+# Сторонние исходники для pyfb2pdfview.lpk (клонируются по README_PASCAL.md)
+pas/thirdparty/
 
 # Локальные книги для ручных проверок
 /test.fb2

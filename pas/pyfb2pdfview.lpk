@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Package Version="5">
+    <PathDelim Value="\"/>
+    <Name Value="pyfb2pdfview"/>
+    <Type Value="RunAndDesignTime"/>
+    <Author Value="pyFB2"/>
+    <License Value="MIT"/>
+    <Description Value="PDF viewer components built on PdfiumPascal (TPdfPageViewControl, TPdfThumbnailsControl) + PdfiumLib bindings to the pdfium engine (the same renderer as in Chrome/Edge): TFb2PdfView (viewer with optional built-in sidebar: ShowOutline / ShowThumbnails), TFb2PdfOutline (bookmarks tree, fb2pdfbookmarks.pas walks FPDFBookmark_*) and TFb2PdfThumbnails (thumbnail strip). Requires third-party sources: ahausladen/PdfiumLib (MPL-2.0), DomenicoMammola/PdfiumPascal (MPL-2.0) and pdfium.dll / libpdfium.so (BSD-3-Clause). The package expects the sources in pas/thirdparty/PdfiumLib and pas/thirdparty/PdfiumPascal (see README_PASCAL.md). NOTE: the package is separate from pyfb2viewer.lpk because it pulls third-party code and a native library; users who do not need PDF do not have to install it."/>
+    <CompilerOptions>
+      <Version Value="11"/>
+      <PathDelim Value="\"/>
+      <SearchPaths>
+        <OtherUnitFiles Value="thirdparty\PdfiumLib\Source;thirdparty\PdfiumPascal\source"/>
+        <UnitOutputDirectory Value="lib\$(TargetCPU)-$(TargetOS)"/>
+      </SearchPaths>
+      <Parsing>
+        <SyntaxOptions>
+          <SyntaxMode Value="ObjFPC"/>
+          <CStyleOperator Value="False"/>
+          <CPPInline Value="False"/>
+          <UseAnsiStrings Value="False"/>
+        </SyntaxOptions>
+      </Parsing>
+    </CompilerOptions>
+    <Version Major="1" Minor="0"/>
+    <Files Count="5">
+      <Item1>
+        <Filename Value="fb2pdfbookmarks.pas"/>
+        <UnitName Value="fb2pdfbookmarks"/>
+      </Item1>
+      <Item2>
+        <Filename Value="fb2pdfview.pas"/>
+        <UnitName Value="fb2pdfview"/>
+      </Item2>
+      <Item3>
+        <Filename Value="fb2pdfoutline.pas"/>
+        <UnitName Value="fb2pdfoutline"/>
+      </Item3>
+      <Item4>
+        <Filename Value="fb2pdfthumbnails.pas"/>
+        <UnitName Value="fb2pdfthumbnails"/>
+      </Item4>
+      <Item5>
+        <Filename Value="fb2pdfview_reg.pas"/>
+        <HasRegisterProc Value="True"/>
+        <UnitName Value="fb2pdfview_reg"/>
+      </Item5>
+    </Files>
+    <CompatibilityMode Value="True"/>
+    <RequiredPkgs Count="1">
+      <Item1>
+        <PackageName Value="LCL"/>
+      </Item1>
+    </RequiredPkgs>
+    <UsageOptions>
+      <UnitPath Value="$(PkgOutDir)"/>
+    </UsageOptions>
+    <PublishOptions>
+      <Version Value="2"/>
+    </PublishOptions>
+  </Package>
+</CONFIG>

@@ -77,9 +77,13 @@ FreePascal, — внешних зависимостей нет.
 | `fb2_wiki.py` | статья об авторе |
 
 Предлагаемый порядок дальнейшей синхронизации: `fb2_web_metadata`,
-`fb2_wiki`. PDF-конвертеры (`fb2_to_pdf`, `pdf_to_fb2`)
-зависят от сторонних библиотек (reportlab/pypdf) и в FPC нереализуемы без
-внешнего движка.
+`fb2_wiki`. PDF-конвертеры (`fb2_to_pdf`, `pdf_to_fb2`) зависят от сторонних
+библиотек (reportlab/pypdf). Для **записи** PDF внешний движок не нужен: в
+поставке FPC есть пакет `fcl-pdf` (юнит `fppdf` — страницы, канва, шрифты
+TrueType, картинки), так что `fb2_to_pdf` реализуем штатными средствами. Для
+**чтения** PDF нужен разбор формата — его даёт движок pdfium: просмотр уже
+реализован компонентом `TFb2PdfView` (раздел «Опциональный компонент
+просмотра PDF»), а текст доступен через `TPdfDocument`/`TPdfPage`.
 
 `fb2_validator.py` (валидация по XSD) — отдельный случай: в fcl-xml нет
 XSD-валидатора, поэтому порт потребует внешней библиотеки либо собственной
@@ -162,11 +166,20 @@ fb2html_cli test_book.fb2 book.html images
   (отключается `AutoImages`; пересобрать — `ApplyImages`).
 - `fb2viewertoolbar.pas` (`TFb2ViewerToolbar`) — панель читалки: история
   (назад/вперёд), размер шрифта, поиск, копирование, печать и предпросмотр.
+  Готовый набор монохромных иконок для её кнопок (PNG 16/24/32/48/64 px,
+  MIT — Bootstrap Icons) лежит в [`icons/`](icons/README.md) вместе с
+  таблицей «команда → иконка» и скриптом перегенерации.
 - `fb2statusbar.pas` (`TFb2StatusBar`) — статус-бар: книга, текущая глава,
   «N из M», полоса прогресса (загрузка книги, затем прогресс чтения).
   Прогресс загрузки: `TFb2ToHtmlConverter.OnProgress` (0..100),
   `TFb2Viewer.OnLoadProgress` / `AddLoadProgressListener` (этапы
   `TFb2LoadStage`); подписчиков может быть несколько.
+- `TFb2Viewer` сохраняет состояние чтения в JSON: `SaveSessionToFile` /
+  `LoadSessionFromFile` (UTF-8 без BOM), а также `SessionToJson` /
+  `ApplySession` для хранения строки в конфиге приложения. В JSON — имя файла,
+  абсолютная позиция, диапазон прокрутки, процент, якорь текущей главы и
+  смещение от него; при восстановлении позиция подстраивается под изменившуюся
+  раскладку.
 - `fb2metadatapanel.pas` (`TFb2MetadataPanel`) — карточка книги: просмотр и
   правка `<description>` с записью обратно в FB2 через `fb2_writer`.
 - `fb2renamelist.pas` (`TFb2RenameList`) — предпросмотр переименования «было →
@@ -179,6 +192,17 @@ fb2html_cli test_book.fb2 book.html images
   Связывается с читалкой свойством `Viewer`: книга открывается по двойному
   щелчку или Enter (`AutoOpen`, по умолчанию включено), вручную —
   `OpenSelectedFile`.
+- **Обратное слежение за читалкой** (`FollowViewer`, по умолчанию True):
+  дерево подписывается на `TFb2Viewer.AddDocumentLoadListener` и при открытии
+  книги само переходит к её файлу — раскрывает каталог и выделяет файл
+  (`SelectFile`), в том числе для вложенных каталогов. Слежение идёт по
+  `TFb2Viewer.DocumentSerial`, поэтому повторные события того же документа
+  (`ReRender` после смены CSS, `Reload`) дерево не дёргают; рекурсия
+  «выделение → открытие → выделение» заблокирована, а уже выделенный файл
+  повторно не выбирается (сохраняются прокрутка и раскрытые ветки). Включение
+  свойства на лету сразу переводит дерево к текущей книге. Вручную —
+  `FollowFile(FileName)`. Парный `TFb2FileListView` при связке через
+  `ShellTreeView` показывает каталог книги автоматически.
 - `fb2filelistview.pas` (`TFb2FileListView`) — парный список файлов каталога
   (`TShellListView`) с той же маской; связывается с деревом через
   `ShellTreeView`, есть `Path`, `SelectedFilePath`, `SelectedFilePaths`.
@@ -186,6 +210,95 @@ fb2html_cli test_book.fb2 book.html images
   используется, картинки отдаются из памяти через `OnImageRequest` (в конвертере
   для этого есть `ConvertStream`/`WriteStream` и `BinaryByFilename`).
 - Подробности и подводные камни — в [`doc/fb2_viewer.md`](../doc/fb2_viewer.md).
+
+## Опциональный компонент просмотра PDF
+
+`fb2pdfview.pas` (`TFb2PdfView`) — панель просмотра PDF поверх
+[PdfiumPascal](https://github.com/DomenicoMammola/PdfiumPascal) (LCL-контролы
+`TPdfPageViewControl` и `TPdfThumbnailsControl`) и
+[PdfiumLib](https://github.com/ahausladen/PdfiumLib) (привязки к движку
+**pdfium** — тому же, что рисует PDF в Chrome/Edge).
+
+В пакете три компонента и вспомогательный модуль:
+
+| Файл | Компонент | Назначение |
+|---|---|---|
+| `fb2pdfview.pas` | `TFb2PdfView` | просмотр PDF (+ встроенный сайдбар) |
+| `fb2pdfoutline.pas` | `TFb2PdfOutline` | дерево оглавления (закладки PDF) |
+| `fb2pdfthumbnails.pas` | `TFb2PdfThumbnails` | лента миниатюр страниц |
+| `fb2pdfbookmarks.pas` | — | чтение закладок (`FPDFBookmark_*`) |
+
+- Отдельный пакет **`pyfb2pdfview.lpk`** (RunAndDesignTime, вкладка «FB2»,
+  компонент `TFb2PdfView`), а не часть `pyfb2viewer.lpk`: он тянет сторонние
+  исходники (MPL-2.0) и нативную библиотеку, поэтому нужен только тем, кто
+  действительно показывает PDF. Имя пакета отличается от имени компонентного
+  юнита по той же причине, что и у `pyfb2viewer` (Lazarus генерирует служебный
+  юнит `<имя пакета>.pas`).
+- Установка — сначала исходники зависимостей в `pas/thirdparty`:
+  ```sh
+  git clone https://github.com/ahausladen/PdfiumLib      pas/thirdparty/PdfiumLib
+  git clone https://github.com/DomenicoMammola/PdfiumPascal pas/thirdparty/PdfiumPascal
+  ```
+  затем `Package → Open Package File → pas/pyfb2pdfview.lpk → Compile → Install`.
+  Пакет ищет юниты по путям `thirdparty\PdfiumLib\Source` и
+  `thirdparty\PdfiumPascal\source` (`OtherUnitFiles` в `.lpk`).
+- Движок — `pdfium.dll` (Windows) / `libpdfium.so` (Linux), лицензия BSD-3:
+  положить рядом с `.exe` (тогда настраивать нечего) либо задать `PdfiumDllFile`.
+  Библиотека грузится один раз на процесс в конструкторе `TPdfDocument`,
+  поэтому путь имеет смысл задавать до первой загрузки документа.
+- Просмотр: прокрутка внутри страницы, режимы масштаба `ScaleMode`
+  (`smFitAuto`/`smFitWidth`/`smFitHeight`/`smZoom`), `ZoomPercentage`,
+  `ZoomStep`, `ZoomIn`/`ZoomOut`/`ZoomReset`, поворот `Rotation` и
+  `RotateLeft`/`RotateRight`/`RotateReset`, подсветка поиска `FindText` /
+  `ClearSearch`, формы и внешние ссылки (`AllowFormEvents`, `OnLinkClick`,
+  `OpenLinks`), пароль (`Password`), оформление (`PageBackgroundColor`,
+  `DrawOptions`, `HighlightTextColor`).
+- Навигация: `PageCount`, `PageIndex` (0-based), `PageNumber` (1-based),
+  `GoToPage`/`GoToPageNumber` (индекс прижимается к границам), `FirstPage`,
+  `LastPage`, `NextPage`, `PrevPage`, `CanGoNext`, `CanGoPrev`.
+- **Оглавление и миниатюры.** У `TFb2PdfView` есть встроенная колонка с
+  вкладками: `ShowOutline` («Содержание» — дерево закладок PDF) и
+  `ShowThumbnails` («Миниатюры» — лента `TPdfThumbnailsControl`), ширина
+  `SidebarWidth` (по умолчанию 220, тянется сплиттером), сторона —
+  `SidebarPosition` (`spLeft` по умолчанию или `spRight`; переключается и на
+  лету, и в инспекторе объектов). Клик по закладке или миниатюре переходит на
+  страницу; смена страницы подсвечивает текущий раздел (закладка «не позже»
+  страницы) и прокручивает ленту. Доступ к внутренним контролам —
+  `OutlineTree`, `ThumbnailsControl`, прочитанные закладки — `Bookmarks`.
+- Для собственной раскладки те же возможности есть отдельными компонентами:
+  `TFb2PdfOutline` (`TCustomTreeView`, свойство `Viewer`, `AutoOpenLinks`,
+  `Images`/`StateImages`/`AutoImages`, `BookmarkImageIndex`, `CurrentImageIndex`,
+  `CurrentStateIndex`, методы `Rebuild`/`Refresh`/`CurrentNode`/`CurrentIndex`,
+  клик по узлу = переход) и `TFb2PdfThumbnails` (`TCustomPanel`, свойство
+  `Viewer`, `Orientation` (`tcVertical`/`tcHorizontal`), `TextColor`,
+  `AllowMovePages` — перетаскивание меняет порядок страниц, по умолчанию выкл.).
+- Источник оглавления — **только закладки PDF** (`fb2pdfbookmarks.pas` обходит
+  `FPDFBookmark_GetFirstChild/GetNextSibling/GetTitle/GetCount/GetDest/GetAction`
+  + `FPDFDest_GetDestPageIndex`, текст читается как UTF-16LE). Если в файле
+  закладок нет — дерево пустое. Внешние закладки (URI/файл) открываются в
+  системном браузере (`AutoOpenLinks`).
+- События и подписки — как у `TFb2Viewer`: `OnDocumentLoad` /
+  `AddDocumentLoadListener`, `OnPageChange` / `AddPageChangeListener`,
+  `OnLoadError` (нет файла, нет `pdfium.dll`, битый или защищённый PDF),
+  `DocumentSerial`. Исключения при открытии наружу не выбрасываются — причина
+  в `LastError`, поэтому `FileName` безопасно задавать в инспекторе объектов.
+- Состояние чтения: `SessionToJson` / `ApplySession` и
+  `SaveSessionToFile` / `LoadSessionFromFile` (файл, страница, масштаб,
+  поворот; UTF-8 без BOM).
+- Доступ к движку: `Document` (`TPdfDocument` — страницы, текст, вложения,
+  метаданные, печать через `TPdfDocumentPrinter` в Windows) и `Viewer`
+  (`TPdfPageViewControl`). Вложенный контрол создаётся лениво (или явно —
+  `InitViewer`), чтобы компонент ставился на форму и без `pdfium.dll`.
+- Ограничения: поиск и подсветка — только по текущей странице (особенность
+  `TPdfPageViewControl`); встроенной печати нет — используйте `Document`;
+  миниатюры рисуются на лету и кэшируются до перезагрузки документа
+  (встроенные в PDF превью `FPDFPage_GetThumbnailAsBitmap` обычно отсутствуют —
+  на тестовых файлах их нет); лента миниатюр не держит постоянную подсветку
+  текущей страницы (в `TPdfThumbnailsControl` подсветка только при наведении,
+  зато лента прокручивается к текущей странице).
+- Лицензии: `fb2pdfview.pas` — MIT (как и весь pyFB2), PdfiumLib и
+  PdfiumPascal — MPL-2.0 (файловый копилефт: их файлы остаются под MPL),
+  `pdfium.dll` — BSD-3-Clause.
 
 ## Использование как библиотеки
 

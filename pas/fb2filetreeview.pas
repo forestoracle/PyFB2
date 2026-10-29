@@ -28,6 +28,14 @@ unit fb2filetreeview;
   Enter. Одиночное выделение ничего не открывает; открыть можно и вручную —
   методом OpenSelectedFile.
 
+  Обратная связь: при FollowViewer = True (по умолчанию) дерево подписывается на
+  загрузку книги в Viewer и само переходит к её файлу — раскрывает каталог и
+  выделяет файл (SelectFile). Слежение идёт по DocumentSerial, поэтому повторные
+  события того же документа (ReRender после смены CSS, Reload) дерево не
+  дёргают; рекурсия «выделение → открытие → выделение» заблокирована флагом, а
+  уже выделенный файл повторно не выбирается (сохраняются прокрутка и раскрытые
+  ветки).
+
   Пример:
       T := TFb2FileTreeView.Create(Self);
       T.Parent := Self;   T.Align := alClient;
@@ -68,12 +76,18 @@ type
     FUserAddItem: TAddItemEvent;
     FViewer: TFb2Viewer;
     FAutoOpen: Boolean;
+    FFollowViewer: Boolean;
+    FFollowing: Boolean;           { идёт SelectFile от нас — защита от рекурсии }
+    FLastFollowSerial: Integer;    { номер документа, к которому уже перешли }
     procedure SetFileMask(const Value: string);
     procedure SetHideEmptyDirs(const Value: Boolean);
     procedure SetHideEmptyDirsScanLimit(const Value: Integer);
     procedure SetUserAddItem(const Value: TAddItemEvent);
     procedure SetViewer(const Value: TFb2Viewer);
     procedure SetAutoOpen(const Value: Boolean);
+    procedure SetFollowViewer(const Value: Boolean);
+    { Читалка загрузила документ — перейти к его файлу (если FollowViewer). }
+    procedure ViewerDocumentLoad(Sender: TObject);
     procedure RebuildMatcher;
     procedure ResetScanBudget;
     procedure RefreshTree;
@@ -104,6 +118,9 @@ type
     { Открыть выделенный файл в связанном Viewer. False — Viewer не задан,
       ничего не выделено или выделен каталог. }
     function OpenSelectedFile: Boolean;
+    { Перейти в каталог файла и выделить его (обёртка над SelectFile с защитой от
+      рекурсии). False — путь пуст, файла нет или он отсеян маской FileMask. }
+    function FollowFile(const AFileName: TFileName): Boolean;
     { Полный путь выбранного файла ('' — выбран каталог или ничего не выбрано). }
     property SelectedFilePath: TFileName read GetSelectedFilePath;
   published
@@ -131,6 +148,11 @@ type
     { Открывать выбранную книгу в Viewer по двойному щелчку или Enter.
       По умолчанию True; одиночное выделение книгу не открывает. }
     property AutoOpen: Boolean read FAutoOpen write SetAutoOpen default True;
+    { Переходить к файлу, загруженному в связанный Viewer: дерево раскрывается
+      до каталога книги и выделяет её (SelectFile). По умолчанию True; без
+      Viewer не действует. }
+    property FollowViewer: Boolean read FFollowViewer write SetFollowViewer
+      default True;
     { Пользовательский обработчик добавления элемента: вызывается после
       фильтра по маске (можно дополнительно установить CanAdd := False). }
     property OnAddItem: TAddItemEvent read FUserAddItem write SetUserAddItem;
@@ -147,6 +169,9 @@ constructor TFb2FileTreeView.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   FAutoOpen := True;
+  FFollowViewer := True;
+  FFollowing := False;
+  FLastFollowSerial := -1;
   { По умолчанию TShellTreeView показывает ТОЛЬКО каталоги (ObjectTypes =
     [otFolders]) — включаем и файлы. }
   ObjectTypes := [otFolders, otNonFolders];
@@ -171,6 +196,8 @@ end;
 
 destructor TFb2FileTreeView.Destroy;
 begin
+  if FViewer <> nil then
+    FViewer.RemoveDocumentLoadListener(@ViewerDocumentLoad);
   FreeAndNil(FMatcher);
   FreeAndNil(FDirWithMatches);
   FreeAndNil(FDirWithoutMatches);
@@ -252,10 +279,21 @@ begin
   if FViewer = Value then
     Exit;
   if FViewer <> nil then
+  begin
+    FViewer.RemoveDocumentLoadListener(@ViewerDocumentLoad);
     FViewer.RemoveFreeNotification(Self);
+  end;
   FViewer := Value;
+  FLastFollowSerial := -1;
   if FViewer <> nil then
+  begin
     FViewer.FreeNotification(Self);
+    { Слежение за загрузкой книги: несколько подписчиков не перекрывают друг
+      друга (OnDocumentLoad у читалки один, а подписок — сколько угодно). }
+    FViewer.AddDocumentLoadListener(@ViewerDocumentLoad);
+    { Читалка могла открыть книгу раньше, чем её связали с деревом. }
+    ViewerDocumentLoad(nil);
+  end;
 end;
 
 procedure TFb2FileTreeView.Notification(AComponent: TComponent;
@@ -269,6 +307,59 @@ end;
 procedure TFb2FileTreeView.SetAutoOpen(const Value: Boolean);
 begin
   FAutoOpen := Value;
+end;
+
+procedure TFb2FileTreeView.SetFollowViewer(const Value: Boolean);
+begin
+  if FFollowViewer = Value then
+    Exit;
+  FFollowViewer := Value;
+  if Value and (FViewer <> nil) then
+  begin
+    { Включили на лету — сразу переходим к уже открытой книге. }
+    FLastFollowSerial := -1;
+    ViewerDocumentLoad(nil);
+  end;
+end;
+
+{ Читалка загрузила документ (или перерисовала тот же): перейти к его файлу.
+
+  Одно событие на документ: DocumentSerial растёт при каждой загрузке, поэтому
+  повторные NotifyDocumentLoad для того же документа (например, после смены CSS
+  или Reload) дерево больше не дёргают. }
+procedure TFb2FileTreeView.ViewerDocumentLoad(Sender: TObject);
+begin
+  if (not FFollowViewer) or (FViewer = nil) or FFollowing then
+    Exit;
+  if FViewer.DocumentSerial = FLastFollowSerial then
+    Exit;
+  FLastFollowSerial := FViewer.DocumentSerial;
+  FollowFile(FViewer.FileName);
+end;
+
+function TFb2FileTreeView.FollowFile(const AFileName: TFileName): Boolean;
+var
+  Full: string;
+begin
+  Result := False;
+  if Trim(AFileName) = '' then
+    Exit;
+  Full := ExpandFileNameUTF8(AFileName);
+  { Файл уже выделен — не трогаем дерево: SelectFile заново ставит Path и
+    перерисовывает ветку, из-за чего пропадает прокрутка/раскрытие. }
+  if CompareFilenames(SelectedFilePath, Full) = 0 then
+  begin
+    Result := True;
+    Exit;
+  end;
+  { Флаг защищает от рекурсии: SelectFile меняет Path/выделение, а обработчик
+    OnChange приложения может снова открыть книгу в читалке. }
+  FFollowing := True;
+  try
+    Result := SelectFile(Full);
+  finally
+    FFollowing := False;
+  end;
 end;
 
 function TFb2FileTreeView.OpenSelectedFile: Boolean;
