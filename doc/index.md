@@ -16,6 +16,7 @@
 | `fb2_normalizer.py` — нормализация/авто-исправление | [fb2_normalizer.md](fb2_normalizer.md) |
 | `fb2_rewrite.py` — пересборка формы FB2 (структуры → XML) | [fb2_rewrite.md](fb2_rewrite.md) |
 | `fb2_xml.py` — безопасный разбор XML (защита от DTD-бомб) | docstring модуля |
+| `fb2_namespaces.py` — приведение пространства имён FB2 к 2.0 | docstring модуля |
 
 ## Конвертеры
 

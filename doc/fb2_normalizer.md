@@ -27,6 +27,7 @@ result.source_encoding
 | Категория | Правки |
 |---|---|
 | **Кодировка** | BOM (`bom-removed`), перекодировка в UTF-8 (`encoding-fixed`), XML-декларация → `utf-8`, CRLF→LF (`newlines-normalized`), недопустимые управляющие символы (`control-chars-removed`) |
+| **Пространство имён** | объявления `xmlns` версий FB2, отличных от 2.0 (`.../fictionbook/2.1`, `2.2` и т. п.), приводятся к 2.0 (`namespace-fixed`); затрагиваются только значения `xmlns`/`xmlns:prefix`, содержимое книги не меняется |
 | **Структура** | порядок дочерних элементов по XSD (`reordered`) для `FictionBook`, `description`, `title-info`, `document-info`, `publish-info`, `body`, `section`, `poem`, `stanza`, `epigraph`, `cite`, `annotation`, `title`, `author`, `coverpage`, `table`, `tr` |
 | **Обязательные поля** | `<description>`, `<title-info>`, `<document-info>`, `<body>/<section>`, `<genre>`, `<author>`, `<book-title>`, `<lang>`, `<id>` (urn:uuid), `<version>`, `<date>`, `<program-used>` |
 | **Дубликаты** | повторяющиеся `<binary>` по `id` (`duplicate-binary-removed`) |

@@ -10,6 +10,8 @@ XSD-схеме FictionBook 2.0. Исправления выполняются «
 
     * **кодировка** — приведение к UTF-8 (BOM, XML-декларация, переводы
       строк, недопустимые управляющие символы);
+    * **пространство имён** — объявления ``xmlns`` версий FB2, отличных
+      от 2.0 (например, ``.../fictionbook/2.1``), приводятся к 2.0;
     * **структура** — порядок дочерних элементов в контейнерах
       (``description``/``title-info``/``document-info``/``body``/``section``
       и т. п.) согласно ``FictionBook.xsd``;
@@ -52,13 +54,11 @@ from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 from lxml import etree
 
 from .fb2_errors import Fb2ConversionError
+from .fb2_namespaces import FB2_NS, normalize_namespace_declarations
 from .fb2_transcoder import detect_encoding
 
 if TYPE_CHECKING:  # pragma: no cover
     from .fb2_validator import Fb2Validator
-
-#: Пространство имён FB2.
-FB2_NS = "http://www.gribuser.ru/xml/fictionbook/2.0"
 
 #: Пространство имён xlink (атрибут ``href`` у ссылок и изображений).
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -460,6 +460,25 @@ class Fb2Normalizer:
             return text
         return fixed + text[match.end():]
 
+    @staticmethod
+    def _fix_namespaces(text: str, fixes: List[NormalizationFix]) -> str:
+        """Привести объявления ``xmlns`` FictionBook к версии 2.0.
+
+        Официальная схема объявляет только пространство 2.0, поэтому файлы
+        с ``.../fictionbook/2.1`` (и подобными версиями) не проходят
+        XSD-валидацию и не разбираются парсером. Заменяются только
+        объявления ``xmlns`` — содержимое книги не переписывается.
+        """
+        fixed, replaced = normalize_namespace_declarations(text)
+        if replaced:
+            fixes.append(
+                NormalizationFix(
+                    "namespace-fixed",
+                    f"пространство имён FB2 приведено к 2.0 (объявлений: {replaced})",
+                )
+            )
+        return fixed
+
     def _parse(self, text: str, fixes: List[NormalizationFix]) -> etree._Element:
         """Разобрать XML (при необходимости — в режиме восстановления)."""
         payload = text.encode("utf-8")
@@ -523,6 +542,7 @@ class Fb2Normalizer:
         encoding = detect_encoding(data)
         text = self._decode(data, encoding, fixes)
         text = self._clean_text(text, fixes)
+        text = self._fix_namespaces(text, fixes)
         root = self._parse(text, fixes)
         self._apply_fixes(root, fixes)
         return root, fixes, encoding
@@ -845,7 +865,7 @@ class Fb2Normalizer:
         os.replace(tmp, path)
 
 
-__all__ = ["Fb2Normalizer", "NormalizationFix", "NormalizationResult"]
+__all__ = ["Fb2Normalizer", "NormalizationFix", "NormalizationResult", "FB2_NS"]
 
 
 def _collect_targets(source: Union[str, Path], recursive: bool) -> List[Path]:

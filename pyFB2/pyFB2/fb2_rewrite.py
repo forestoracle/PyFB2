@@ -14,7 +14,9 @@
     * проверка результата по XSD **до** записи (``--validate``);
     * пропуск файлов, содержимое которых не изменилось (``--force``
       заставляет писать всегда);
-    * рекурсивная обработка каталога.
+    * рекурсивная обработка каталога;
+    * приведение пространства имён FB2 (``.../fictionbook/2.1`` и других
+      версий) к официальному 2.0.
 
 Пример:
     >>> from fb2_rewrite import Fb2Rewriter
@@ -35,9 +37,11 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import copy
 import logging
 import os
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Union
@@ -45,9 +49,11 @@ from typing import TYPE_CHECKING, List, Optional, Union
 from lxml import etree
 
 from .fb2_errors import Fb2Error, Fb2ValidationError
+from .fb2_namespaces import normalize_tree_namespaces
 from .fb2_parser import Fb2Parser
 from .fb2_structures import FictionBook
 from .fb2_writer import Fb2Writer
+from .fb2_xml import parse_xml
 
 if TYPE_CHECKING:  # pragma: no cover - только для аннотаций
     from .fb2_validator import Fb2Validator
@@ -154,6 +160,26 @@ class Fb2Rewriter:
         self._validator: Optional[Fb2Validator] = None
 
     # --- Разбор и сборка ---------------------------------------------------
+    @staticmethod
+    def _load_root(source) -> ET.Element:
+        """Прочитать документ, приведя пространство имён FB2 к версии 2.0.
+
+        Файлы с ``.../fictionbook/2.1`` (и подобными версиями) иначе не
+        разбираются: :class:`Fb2Parser` ищет элементы в пространстве 2.0.
+        Переданный готовым ``ET.Element`` копируется, чтобы не изменять
+        дерево вызывающего кода.
+
+        :param source: путь к FB2, файловый объект или ``ET.Element``.
+        :return: корневой элемент документа.
+        :raises Fb2ParseError: если документ не читается или не разбирается.
+        """
+        if isinstance(source, ET.Element):
+            root = copy.deepcopy(source)
+        else:
+            root = parse_xml(source)
+        normalize_tree_namespaces(root)
+        return root
+
     def to_xml(self, source) -> str:
         """Разобрать FB2 и собрать его заново в строку XML.
 
@@ -161,7 +187,7 @@ class Fb2Rewriter:
         :return: XML-текст с декларацией UTF-8.
         :raises Fb2ParseError: если документ не читается или не разбирается.
         """
-        parser = Fb2Parser(source=source)
+        parser = Fb2Parser(source=self._load_root(source))
         book = FictionBook(
             stylesheets=parser.parse_stylesheets(),
             description=parser.parse(),

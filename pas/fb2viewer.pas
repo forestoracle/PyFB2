@@ -39,6 +39,7 @@ interface
 
 uses
   Classes, SysUtils, Forms, Controls, ExtCtrls, LCLIntf, FileUtil, LazUTF8,
+  fpjson,                                  { JSON-сессия чтения }
   fb2_structures, fb2_parser, fb2_html,   { наш порт — без GUI }
   HtmlGlobals, HtmlView, HTMLUn2;          { HtmlViewer 11: движок + TIDObject }
 
@@ -88,6 +89,13 @@ type
     FTocSerial: Integer;           { для какого документа посчитан кэш }
     FTocRange: Integer;            { высота документа, при которой посчитан кэш }
     FNoteBackPos: TStringList;     { 'noteref-<id>' -> позиция возврата в тексте }
+    FPendingScroll: Boolean;       { ждём готовности раскладки, чтобы восстановить позицию }
+    FPendingScrollPos: Integer;
+    FPendingScrollRange: Integer;
+    FPendingScrollPercent: Integer;
+    FPendingAnchor: UnicodeString;
+    FPendingAnchorOffset: Integer;
+    FPendingScrollTries: Integer;
 
     function NewTempDir: UnicodeString;
     procedure ClearTempDir;
@@ -106,6 +114,9 @@ type
     procedure NotifyScroll;
     procedure DoLoadProgress(Stage: TFb2LoadStage; Percent: Integer);
     procedure ConverterProgress(Sender: TObject; Percent: Integer);
+    procedure RestoreScrollState(Position, SavedRange, Percent: Integer;
+      const Anchor: UnicodeString; AnchorOffset: Integer);
+    function TryApplyPendingScroll: Boolean;
     procedure UpdateTracking;
     procedure DoTrackTimer(Sender: TObject);
     procedure RefreshTocPositions;
@@ -148,6 +159,16 @@ type
       быть несколько; статус-бар использует это для полосы загрузки. }
     procedure AddLoadProgressListener(const Handler: TFb2LoadProgressEvent);
     procedure RemoveLoadProgressListener(const Handler: TFb2LoadProgressEvent);
+
+    { Состояние чтения в JSON (UTF-8): имя файла, позиция прокрутки, диапазон,
+      процент, якорь текущей главы и смещение от него. }
+    function SessionToJson: UnicodeString;
+    { Применить состояние из JSON: если файл отличается — загрузить его, затем
+      восстановить позицию. Ошибки разбора JSON и загрузки книги — исключением. }
+    procedure ApplySession(const AJson: UnicodeString);
+    { Сохранить/прочитать состояние чтения в JSON-файле (UTF-8 без BOM). }
+    procedure SaveSessionToFile(const AFileName: TFileName);
+    procedure LoadSessionFromFile(const AFileName: TFileName);
 
     { Текущее смещение вертикальной прокрутки (в пикселях документа). }
     function ScrollPosition: Integer;
@@ -365,17 +386,16 @@ begin
   end;
 end;
 
-{ Прочитать текстовый файл (CSS): BOM UTF-8/UTF-16 учитывается, без BOM текст
-  считается UTF-8 (наш стандарт — как в fb2_html и остальных модулях).
-  False — файл недоступен. }
-function ReadCssText(const FileName: TFileName; out Css: UnicodeString): Boolean;
+{ Прочитать текстовый файл: BOM UTF-8/UTF-16 учитывается, без BOM текст
+  считается UTF-8 (стандарт библиотеки). False — файл недоступен. }
+function ReadTextFile(const FileName: TFileName; out Text: UnicodeString): Boolean;
 var
   FS: TFileStream;
   Bytes: TBytes;
   N: Int64;
 begin
   Result := False;
-  Css := '';
+  Text := '';
   try
     FS := TFileStream.Create(UTF8ToSys(FileName), fmOpenRead or fmShareDenyWrite);
   except
@@ -392,18 +412,69 @@ begin
     FS.Free;
   end;
   if (Length(Bytes) >= 2) and (Bytes[0] = $FF) and (Bytes[1] = $FE) then
-    Css := TEncoding.Unicode.GetString(Bytes, 2, Length(Bytes) - 2)
+    Text := TEncoding.Unicode.GetString(Bytes, 2, Length(Bytes) - 2)
   else if (Length(Bytes) >= 2) and (Bytes[0] = $FE) and (Bytes[1] = $FF) then
-    Css := TEncoding.BigEndianUnicode.GetString(Bytes, 2, Length(Bytes) - 2)
+    Text := TEncoding.BigEndianUnicode.GetString(Bytes, 2, Length(Bytes) - 2)
   else
   begin
     if (Length(Bytes) >= 3) and (Bytes[0] = $EF) and (Bytes[1] = $BB) and
       (Bytes[2] = $BF) then
-      Css := TEncoding.UTF8.GetString(Bytes, 3, Length(Bytes) - 3)
+      Text := TEncoding.UTF8.GetString(Bytes, 3, Length(Bytes) - 3)
     else
-      Css := TEncoding.UTF8.GetString(Bytes);
+      Text := TEncoding.UTF8.GetString(Bytes);
   end;
   Result := True;
+end;
+
+{ Прочитать текстовый файл (CSS). Оставлено отдельным именем для читаемости
+  вызовов; реализация общая с JSON-сессией. }
+function ReadCssText(const FileName: TFileName; out Css: UnicodeString): Boolean;
+begin
+  Result := ReadTextFile(FileName, Css);
+end;
+
+const
+  { Версия формата JSON-сессии. }
+  SESSION_JSON_VERSION = 1;
+
+{ Строковое поле JSON; '' — поля нет или это не строка. }
+function JsonStr(Obj: TJSONObject; const Name: String): UnicodeString;
+var
+  D: TJSONData;
+begin
+  Result := '';
+  if Obj = nil then
+    Exit;
+  D := Obj.Find(Name);
+  if (D <> nil) and (D.JSONType = jtString) then
+    Result := D.AsUnicodeString;
+end;
+
+{ Числовое поле JSON; Default — поля нет или оно не число. }
+function JsonInt(Obj: TJSONObject; const Name: String; Default: Int64): Int64;
+var
+  D: TJSONData;
+begin
+  Result := Default;
+  if Obj = nil then
+    Exit;
+  D := Obj.Find(Name);
+  if D = nil then
+    Exit;
+  case D.JSONType of
+    jtNumber: Result := D.AsInt64;
+    jtString: Result := StrToInt64Def(D.AsString, Default);
+  end;
+end;
+
+function ClampToInt(Value: Int64): Integer;
+begin
+  if Value < 0 then
+    Result := 0
+  else if Value > MaxInt then
+    Result := MaxInt
+  else
+    Result := Value;
 end;
 
 constructor TFb2Viewer.Create(AOwner: TComponent);
@@ -432,6 +503,8 @@ begin
   FProcessMessagesOnLoad := False;
   FLastProgressPercent := -1;
   FLastPumpedPercent := -1;
+  FPendingScroll := False;
+  FPendingAnchor := '';
   FLastScrollPos := -1;
   FNoteBackPos := TStringList.Create;
 
@@ -560,6 +633,207 @@ begin
     Result := FViewer.VScrollBarPosition;
 end;
 
+{ ===================== Сессия чтения (JSON) ===================== }
+
+function TFb2Viewer.SessionToJson: UnicodeString;
+var
+  Obj: TJSONObject;
+  Pos, Range, Idx, AnchorY, Offset, Percent: Integer;
+  Anchor: UnicodeString;
+begin
+  Pos := ScrollPosition;
+  Range := 0;
+  if FViewer <> nil then
+    Range := FViewer.VScrollBarRange;
+  if Pos < 0 then
+    Pos := 0;
+  if Range < 0 then
+    Range := 0;
+  if (Range > 0) and (Pos > Range) then
+    Pos := Range;
+  if (Range > 0) and (Pos >= 0) then
+    Percent := Pos * 100 div Range
+  else
+    Percent := 0;
+
+  { Якорь текущей главы + смещение: позиция восстанавливается точнее, если
+    раскладка изменилась (другой размер окна, шрифт, догрузка картинок). }
+  Anchor := '';
+  Offset := 0;
+  if (FConverter <> nil) and (FConverter.TocEntries <> nil) then
+  begin
+    Idx := TocIndexOfCurrent(16);
+    if (Idx >= 0) and (Idx < FConverter.TocEntries.Count) then
+    begin
+      Anchor := FConverter.TocEntries[Idx].Anchor;
+      AnchorY := TocEntryPosition(Idx);
+      if AnchorY >= 0 then
+      begin
+        Offset := Pos - AnchorY;
+        if Offset < 0 then
+          Offset := 0;
+      end
+      else
+        Anchor := '';
+    end;
+  end;
+
+  Obj := TJSONObject.Create;
+  try
+    Obj.Add('version', SESSION_JSON_VERSION);
+    Obj.Add('file', TJSONStringType(FFileName));
+    Obj.Add('position', Int64(Pos));
+    Obj.Add('scroll_range', Int64(Range));
+    Obj.Add('percent', Percent);
+    Obj.Add('anchor', UTF8Encode(Anchor));
+    Obj.Add('anchor_offset', Int64(Offset));
+    Result := UTF8Decode(Obj.FormatJSON(DefaultFormat, 2));
+  finally
+    Obj.Free;
+  end;
+end;
+
+procedure TFb2Viewer.ApplySession(const AJson: UnicodeString);
+var
+  Data: TJSONData;
+  Obj: TJSONObject;
+  SessionFileName: TFileName;
+  Anchor: UnicodeString;
+  Position, Range, Percent, Offset: Integer;
+begin
+  if FLoading then
+    Exit;
+  Data := GetJSON(UTF8Encode(AJson), True);
+  try
+    if (Data = nil) or (Data.JSONType <> jtObject) then
+      raise Exception.Create('Некорректный JSON сессии: ожидается объект');
+    Obj := TJSONObject(Data);
+
+    SessionFileName := TFileName(UTF8Encode(JsonStr(Obj, 'file')));
+    if (SessionFileName <> '') and
+       ((FFileName <> SessionFileName) or (FHtml = '')) then
+      LoadFromFile(SessionFileName);
+
+    Position := ClampToInt(JsonInt(Obj, 'position', 0));
+    Range := ClampToInt(JsonInt(Obj, 'scroll_range', 0));
+    Percent := ClampToInt(JsonInt(Obj, 'percent', 0));
+    Offset := ClampToInt(JsonInt(Obj, 'anchor_offset', 0));
+    Anchor := JsonStr(Obj, 'anchor');
+    RestoreScrollState(Position, Range, Percent, Anchor, Offset);
+  finally
+    Data.Free;
+  end;
+end;
+
+procedure TFb2Viewer.SaveSessionToFile(const AFileName: TFileName);
+var
+  Path, Dir: UnicodeString;
+begin
+  Path := UTF8ToString(AFileName);
+  Dir := ExtractFileDir(Path);
+  if Dir <> '' then
+    ForceDirectories(Dir);
+  WriteUtf8File(Path, SessionToJson);
+end;
+
+procedure TFb2Viewer.LoadSessionFromFile(const AFileName: TFileName);
+var
+  JsonText: UnicodeString;
+begin
+  if not ReadTextFile(AFileName, JsonText) then
+    raise Exception.CreateFmt('Файл сессии не найден: %s', [AFileName]);
+  ApplySession(JsonText);
+end;
+
+{ Запомнить параметры восстановления и применить их сразу, если раскладка уже
+  готова; иначе таймер опроса будет повторять попытки. }
+procedure TFb2Viewer.RestoreScrollState(Position, SavedRange, Percent: Integer;
+  const Anchor: UnicodeString; AnchorOffset: Integer);
+begin
+  if FHtml = '' then
+    Exit;
+  if Position < 0 then
+    Position := 0;
+  if SavedRange < 0 then
+    SavedRange := 0;
+  if Percent < 0 then
+    Percent := 0;
+  if Percent > 100 then
+    Percent := 100;
+  if AnchorOffset < 0 then
+    AnchorOffset := 0;
+
+  FPendingScrollPos := Position;
+  FPendingScrollRange := SavedRange;
+  FPendingScrollPercent := Percent;
+  FPendingAnchor := Anchor;
+  FPendingAnchorOffset := AnchorOffset;
+  FPendingScrollTries := 40;   { ~10 секунд при интервале таймера 250 мс }
+  FPendingScroll := True;
+  TryApplyPendingScroll;
+  UpdateTracking;
+end;
+
+{ True — попытка обработана (позиция применена или ожидаем раскладку);
+  False — восстанавливать нечего. }
+function TFb2Viewer.TryApplyPendingScroll: Boolean;
+var
+  CurRange, Target, Y: Integer;
+begin
+  Result := False;
+  if not FPendingScroll then
+    Exit;
+  Result := True;
+  if (FViewer = nil) or (FHtml = '') then
+    Exit;
+
+  CurRange := FViewer.VScrollBarRange;
+  if CurRange <= 0 then
+  begin
+    Dec(FPendingScrollTries);
+    if FPendingScrollTries <= 0 then
+    begin
+      FPendingScroll := False;
+      UpdateTracking;
+    end;
+    Exit;
+  end;
+
+  Target := -1;
+  if FPendingAnchor <> '' then
+  begin
+    Y := AnchorPosition(FPendingAnchor);
+    if Y >= 0 then
+      Target := Y + FPendingAnchorOffset;
+  end;
+  if Target < 0 then
+  begin
+    if (FPendingScrollRange > 0) and
+       (Abs(CurRange - FPendingScrollRange) <= FPendingScrollRange div 5) then
+      Target := FPendingScrollPos
+    else if FPendingScrollPercent > 0 then
+      Target := CurRange * FPendingScrollPercent div 100
+    else
+      Target := FPendingScrollPos;
+  end;
+  if Target < 0 then
+    Target := 0;
+  if Target > CurRange then
+    Target := CurRange;
+
+  if FViewer.VScrollBarPosition <> Target then
+  begin
+    FViewer.VScrollBarPosition := Target;
+    FLastScrollPos := FViewer.VScrollBarPosition;
+    NotifyScroll;
+  end
+  else
+    FLastScrollPos := Target;
+
+  FPendingScroll := False;
+  UpdateTracking;
+end;
+
 function TFb2Viewer.AnchorPosition(const Anchor: UnicodeString): Integer;
 var
   Obj: TObject;
@@ -595,13 +869,15 @@ begin
   UpdateTracking;
 end;
 
-{ Включить опрос позиции, только если есть документ и подписчики. }
+{ Включить опрос позиции, если есть документ и (есть подписчики или ждём
+  восстановления позиции из сессии). }
 procedure TFb2Viewer.UpdateTracking;
 begin
   if FTrackTimer = nil then
     Exit;
-  FTrackTimer.Enabled := (FHtml <> '') and (FScrollListeners <> nil) and
-    (FScrollListeners.Count > 0);
+  FTrackTimer.Enabled := (FHtml <> '') and
+    (FPendingScroll or ((FScrollListeners <> nil) and
+      (FScrollListeners.Count > 0)));
 end;
 
 procedure TFb2Viewer.NotifyScroll;
@@ -617,6 +893,10 @@ var
   Pos: Integer;
 begin
   if (FViewer = nil) or (FHtml = '') then
+    Exit;
+  { Сначала пытаемся восстановить сохранённую позицию: раскладка может быть
+    готова не сразу (картинки подгружаются асинхронно). }
+  if TryApplyPendingScroll then
     Exit;
   Pos := FViewer.VScrollBarPosition;
   if Pos = FLastScrollPos then
@@ -722,6 +1002,10 @@ begin
   if not FileExists(UTF8ToSys(AFileName)) then
     raise Exception.CreateFmt('FB2 не найден: %s', [AFileName]);
 
+  { Новая загрузка отменяет незавершённое восстановление позиции. }
+  FPendingScroll := False;
+  FPendingAnchor := '';
+
   ClearTempDir;
   FTempDir := NewTempDir;
   FFileName := AFileName;
@@ -776,6 +1060,10 @@ begin
   { Без временного каталога: HTML держим в памяти, картинки — из binary. }
   if FLoading then
     Exit;
+
+  { Новая загрузка отменяет незавершённое восстановление позиции. }
+  FPendingScroll := False;
+  FPendingAnchor := '';
 
   ClearTempDir;
   FTempDir := '';
@@ -844,6 +1132,9 @@ var
 begin
   if FHtml = '' then
     Exit;
+  { Пользователь выбрал переход — незавершённое восстановление позиции из
+    сессии больше не нужно. }
+  FPendingScroll := False;
   { Быстрый путь: якорь есть в текущем документе — просто прокручиваем к нему.
     AnchorPosition возвращает Y в той же системе координат, что и
     VScrollBarPosition (движок сам прыгает к якорю через ScrollTo(YPosition)),
@@ -871,6 +1162,8 @@ begin
   Result := False;
   if FNoteBackPos = nil then
     Exit;
+  { Переход по ссылке отменяет отложенное восстановление позиции. }
+  FPendingScroll := False;
   Hash := LastDelimiter('#', Src);
   if Hash = 0 then
     Exit;
