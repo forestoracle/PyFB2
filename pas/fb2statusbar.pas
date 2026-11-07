@@ -371,7 +371,9 @@ begin
     Pos := 0;
   if Pos > Max then
     Pos := Max;
-  Result := Pos * 100 div Max;
+  { Int64: у очень длинных книг Pos * 100 выходит за 32 бита (см.
+    TFb2Viewer.SessionToJson). }
+  Result := Integer(Int64(Pos) * 100 div Max);
 end;
 
 { Что показывает панель: во время загрузки — прогресс загрузки, иначе — чтения. }

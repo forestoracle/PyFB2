@@ -10,7 +10,7 @@ interface
 uses
   fb2_structures, fb2_parser, fb2_html, fb2viewer, fb2outline, 
   fb2viewertoolbar, fb2statusbar, fb2metadatapanel, fb2viewer_reg, 
-  fb2renamelist, fb2filetreeview, fb2filelistview, LazarusPackageIntf;
+  fb2renamelist, fb2filetreeview, fb2filelistview, fb2_archive, LazarusPackageIntf;
 
 implementation
 

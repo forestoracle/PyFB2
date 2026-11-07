@@ -431,6 +431,9 @@ function TFb2Writer.BuildParagraph(P: TParagraph): TDOMElement;
 begin
   Result := NewElement('p');
   AddAttr(Result, 'id', P.Id);
+  { style="pre" помечает блок кода (см. STYLE_PRE в fb2_structures) — без
+    этого атрибута информация о блоке терялась при сериализации. }
+  AddAttr(Result, 'style', P.Style);
   AppendStyle(Result, P.Content);
 end;
 

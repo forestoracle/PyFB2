@@ -22,7 +22,7 @@ FreePascal, — внешних зависимостей нет.
 | `fb2_to_txt.pas`      | `fb2_to_txt.py`        | готов  | экспорт в обычный текст (TXT)                |
 | `fb2_to_epub.pas`     | `fb2_to_epub.py`       | готов  | EPUB 2.0/3.0 (ZIP: OPF, NCX, nav, XHTML)     |
 | `epub_to_fb2.pas`     | `epub_to_fb2.py`       | готов  | EPUB → FB2 (OPF, spine, XHTML → структуры)   |
-| `fb2_archive.pas`     | — (`zipfile`)          | готов  | чтение ZIP-архива в память (TUnZipper)       |
+| `fb2_archive.pas`     | — (`zipfile`)          | готов  | чтение ZIP (EPUB, `.fb2.zip`) в память (TUnZipper) |
 | `fb2_genres.pas`      | `resources/genres.json` | готов | справочник жанров FictionBook (110)         |
 | `fb2_html.pas`        | `fb2_to_html.py`       | готов  | экспорт в HTML (TOC, сноски) + изображения   |
 | `fb2_errors.pas`      | `fb2_errors.py`        | готов  | единая иерархия исключений (`EFb2Error`)     |
@@ -63,7 +63,7 @@ FreePascal, — внешних зависимостей нет.
 | `mobi_to_fb2.pas`     | `mobi_to_fb2.py`       | готов  | MOBI → FB2 (PalmDB, PalmDOC, EXTH, HTML)     |
 | `fb2tomobi_cli.pas`   | `main()` в `fb2_to_mobi` | готов | CLI: конвертация в `.mobi`          |
 | `mobitofb2_cli.pas`   | `main()` в `mobi_to_fb2` | готов | CLI: конвертация из `.mobi`         |
-| `markdown_to_fb2.pas` | `markdown_to_fb2.py`   | готов  | Markdown → FB2 (заголовки, метаданные, разметка) |
+| `markdown_to_fb2.pas` | `markdown_to_fb2.py`   | готов  | Markdown → FB2 (заголовки, метаданные, разметка, callout'ы Obsidian) |
 | `markdowntofb2_cli.pas` | `main()` в `markdown_to_fb2` | готов | CLI: конвертация из `.md`      |
 | `Makefile`, `build_pascal.bat` | —             | готов  | сборка                                       |
 
@@ -185,13 +185,19 @@ fb2html_cli test_book.fb2 book.html images
 - `fb2renamelist.pas` (`TFb2RenameList`) — предпросмотр переименования «было →
   станет» по шаблону (`fb2_renamer`/`fb2_group_renamer`) с выполнением по кнопке.
 - `fb2filetreeview.pas` (`TFb2FileTreeView`) — дерево файловой системы
-  (`TShellTreeView`), в котором видны только FB2-файлы: маска `FileMask`
-  (по умолчанию `*.fb2`), `HideEmptyDirs` (не показывать каталоги без FB2;
+  (`TShellTreeView`), в котором видны только книги, которые открывает читалка:
+  маска `FileMask` (по умолчанию
+  `DefaultBookFileMask = '*.fb2;*.fb2.zip;*.epub;*.md;*.markdown;*.docx'`), `HideEmptyDirs`
+  (не показывать каталоги без книг;
   объём проверки ограничен `HideEmptyDirsScanLimit`), `SelectedFilePath`
   и `SelectFile` (раскрыть дерево до книги и выделить её).
   Связывается с читалкой свойством `Viewer`: книга открывается по двойному
   щелчку или Enter (`AutoOpen`, по умолчанию включено), вручную —
-  `OpenSelectedFile`.
+  `OpenSelectedFile`. Быстрый переход по буквам (`QuickSearch`, по умолчанию
+  включён): набор символов выделяет следующий видимый узел, имя которого
+  начинается с префикса (регистр не важен, кириллица работает); пауза
+  `QuickSearchTimeout` (1000 мс), `Backspace` и `Esc` управляют префиксом,
+  программно — `SelectByPrefix`/`ResetQuickSearch`/`QuickSearchText`.
 - **Обратное слежение за читалкой** (`FollowViewer`, по умолчанию True):
   дерево подписывается на `TFb2Viewer.AddDocumentLoadListener` и при открытии
   книги само переходит к её файлу — раскрывает каталог и выделяет файл
@@ -209,7 +215,111 @@ fb2html_cli test_book.fb2 book.html images
 - Загрузка из потока: `Viewer.LoadFromStream(Stream)` — временный каталог не
   используется, картинки отдаются из памяти через `OnImageRequest` (в конвертере
   для этого есть `ConvertStream`/`WriteStream` и `BinaryByFilename`).
+- **Архивы `.fb2.zip`**: `Viewer.FileName := 'book.fb2.zip'` (или
+  `Viewer.LoadFromZip(...)`) открывает книгу прямо из архива без временного
+  каталога; из ZIP читается только запись с FB2 (`fb2_archive.ReadFb2FromZip`),
+  `FileName` остаётся путём к архиву — поэтому работают JSON-сессия и слежение
+  дерева. Свойство `ZipEntry` задаёт запись для многокнижного архива
+  (по умолчанию автовыбор), `ZipEntryName` сообщает, из какой записи загружено.
+  Дерево и список по умолчанию показывают и этот вид, и остальные (см. ниже).
+- **EPUB, Markdown и DOCX**: `Viewer.FileName := 'book.epub'` (или `'notes.md'`,
+  `'реферат.docx'`) — книга конвертируется в FB2 в памяти (`epub_to_fb2` /
+  `markdown_to_fb2` / `docx_to_fb2`) и показывается обычным потоковым путём
+  (оглавление, сноски, картинки из `<binary>`); `FileName` остаётся путём к
+  исходному файлу, поэтому работают сессия чтения, `Reload` и слежение дерева.
+  Методы `LoadFromEpub` / `LoadFromMarkdown` / `LoadFromDocx`, функции
+  `IsEpubFile`, `IsMarkdownFile`, `IsDocxFile`, `IsViewableBookFile`.
+  Дерево и список по умолчанию показывают и эти форматы
+  (`DefaultBookFileMask`). Markdown-конвертер понимает и callout'ы (выноски)
+  Obsidian (`> [!NOTE] Заголовок` + строки цитаты) — они отдаются таблицей 1×2
+  (жирный заголовок + текст); поддерживаются все встроенные типы и синонимы
+  (`note`/`info`/`abstract`/`summary`/`todo`, `tip`/`hint`/`important`,
+  `warning`/`caution`/`attention`, `error`/`danger`/`failure`/`fail`/`bug`,
+  `question`/`help`/`faq`, `success`/`check`/`done`, `example`,
+  `quote`/`cite`), а `fb2_html` красит заголовок в цвет группы типа. Сырой
+  `[!NOTE]` в текст не попадает.
 - Подробности и подводные камни — в [`doc/fb2_viewer.md`](../doc/fb2_viewer.md).
+
+### Если при прокрутке возникает `ERangeError: Range check error`
+
+Наблюдаемый случай (разобран на книге Платонова, 8,6 МБ, ~216 глав): ошибка
+возникает **только при быстром перетаскивании ползунка** полосы прокрутки, а при
+переходе по оглавлению — нет. Источник — **не** модули этой библиотеки, а
+`HtmlViewer` (пакет `FrameViewer09`), собранный **с проверкой диапазона** (`-Cr`).
+
+Ход диагностики:
+
+- В объектниках пакета HtmlViewer (`package\lib\...\htmlview.o`) — **262** вызова
+  `fpc_rangeerror`; в объектниках `pyfb2viewer` таких вызовов нет. Значит,
+  проверки включены именно у HtmlViewer (например, при его пересборке в IDE
+  с включённым «Range checking» или с `-dDEBUG`, где `fpc.cfg` добавляет
+  `-gl -Crtoi`).
+- Стек исключения (сборка с `-gl`):
+
+  ```
+  ERangeError: Range check error
+    CHARACTERJUSTIFICATION, line 13336 of HTMLSubs.pas
+    DRAWTHETEXT,      13765
+    DODRAW,           13864
+    DRAW1,            13914
+    DRAWTHELIST,       6282  (и далее вложенные DRAWBLOCK/DRAWASBLOCK)
+  ```
+
+- Виновник — `HTMLSubs.pas:13335-13336`:
+
+  ```pascal
+  SetLength(Dx, N);
+  pDx := @Dx[0];        { при N = 0 это выход за границы Dx -> ERangeError, если -Cr }
+  ```
+
+  То есть `CharacterJustification` вызывается с пустым фрагментом текста
+  (`N = 0`), но с ненулевыми `LR.Spaces`/`LR.Extra` (выравнивание «по ширине»).
+  Без `-Cr` проверка не срабатывает — читается «мусор», и всё визуально работает.
+  Поэтому баг десятилетиями незаметен и проявляется только в сборках с проверками
+  и только на строках, до которых доходит отрисовка именно при быстрой прокрутке.
+
+- Проверено бисекцией CSS (`TFb2Viewer.CssFile`): с `text-align: justify` в
+  `book.css` — падение; тот же CSS **без** `text-align: justify` — ошибки нет
+  (диапазон прокрутки не меняется); без CSS — ошибки нет. Библиотека сама
+  `justify` не задаёт — это исключительно пользовательский CSS.
+
+Способы устранения (любой из них):
+
+1. **Пересобрать `FrameViewer09` без проверок** (рекомендуется): в Lazarus открыть
+   пакет `FrameViewer09.lpk` → «Параметры» → «Компиляция» → убрать «Проверку
+   диапазона», «Проверку переполнения» и «Проверку стека» → «Собрать». Затем
+   пересобрать приложение. Проверить можно так: в объектнике не должно остаться
+   ссылок на проверки — `objdump -t htmlview.o | findstr /i rangeerror` пусто.
+2. **Убрать `text-align: justify`** из своего `book.css` (проверено: ошибка
+   исчезает, остальная вёрстка не меняется).
+3. **Патч HtmlViewer** (если нужны и проверки, и выравнивание) — защита от пустого
+   фрагмента в `HTMLSubs.pas`:
+
+   ```pascal
+   begin
+     if N <= 0 then
+     begin
+       pDx := nil;
+       Result := 0;
+       Exit;
+     end;
+     SetLength(Dx, N);
+     pDx := @Dx[0];
+   ```
+
+Если `ERangeError` приходит из **своего** кода (проект собран с проверками), найти
+строку проще всего в IDE: «Проект → Параметры проекта… → Отладка» → остановка на
+исключениях (`Break on exceptions`), повторить действие — IDE остановится на
+месте. Для уже собранного приложения можно временно добавить обработчик:
+
+```pascal
+procedure TForm1.AppException(Sender: TObject; E: Exception);
+begin
+  Application.OnException := nil;      { без рекурсии }
+  ShowMessage(E.ClassName + ': ' + LineEnding + E.Message + LineEnding +
+    BackTraceStrFunc(ExceptAddr));     { нужна сборка с -gl }
+end;
+```
 
 ## Опциональный компонент просмотра PDF
 

@@ -307,7 +307,8 @@ pyFB2/
   setup.py / pyproject.toml
 doc/                     # документация по модулям
 pas/                     # частичный порт на FreePascal (структуры, парсер, writer, markdown)
-tools/                   # вспомогательные утилиты (dated_dirs.py — раскладка файлов по датам)
+tools/                   # вспомогательные утилиты (dated_dirs.py — раскладка файлов по датам,
+                         # fb2_author_from_dir.py — автор из имени каталога)
 ```
 
 ## Разработка

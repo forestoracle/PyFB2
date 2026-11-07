@@ -23,7 +23,7 @@
       </Parsing>
     </CompilerOptions>
     <Version Major="1" Minor="0"/>
-    <Files Count="12">
+    <Files Count="13">
       <Item1>
         <Filename Value="fb2_structures.pas"/>
         <UnitName Value="fb2_structures"/>
@@ -73,6 +73,10 @@
         <Filename Value="fb2filelistview.pas"/>
         <UnitName Value="fb2filelistview"/>
       </Item12>
+      <Item13>
+        <Filename Value="fb2_archive.pas"/>
+        <UnitName Value="fb2_archive"/>
+      </Item13>
     </Files>
     <CompatibilityMode Value="True"/>
     <RequiredPkgs Count="3">

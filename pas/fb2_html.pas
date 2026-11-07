@@ -10,7 +10,10 @@ unit fb2_html;
       * <p>, <strong>, <emphasis>, <a>    -> абзацы и inline-разметка;
       * <epigraph>, <cite>                -> <blockquote>;
       * <poem>/<stanza>/<v>               -> блоки со строфами;
-      * <table>                           -> HTML-таблица;
+      * <table>                           -> HTML-таблица (если style таблицы
+        начинается с «callout», таблица получает class="callout", а ячейка
+        заголовка — class="callout-<тип>": так Markdown-выноски получают цвет
+        заголовка по типу);
       * <binary>                          -> файлы изображений (или data-URI);
       * сноски (<a type="note">)          -> двусторонние ссылки: из текста в
         сноску (<a class="note-ref">) и обратно
@@ -71,6 +74,7 @@ const
     'p { margin: 0; text-indent: 1.2em; }' + #10 +
     'p.subtitle { text-align: center; font-weight: bold; text-indent: 0; margin: 1em 0; }' + #10 +
     'p.empty-line { text-indent: 0; height: 1em; }' + #10 +
+    'pre { margin: 0.6em 0; font-size: 0.92em; }' + #10 +
     'blockquote { margin: 1em 2em; }' + #10 +
     'blockquote.epigraph { font-style: italic; }' + #10 +
     '.poem { margin: 1em 2em; }' + #10 +
@@ -82,6 +86,15 @@ const
     'table { border-collapse: collapse; margin: 1em auto; }' + #10 +
     'td, th { border: 1px solid #888; padding: 0.2em 0.5em; }' + #10 +
     'th { background: #eee; }' + #10 +
+    'table.callout { margin: 1em 0; }' + #10 +
+    'th.callout-note { background: #e8f0fe; border-left: 4px solid #4a6fd4; }' + #10 +
+    'th.callout-tip { background: #e6f6f2; border-left: 4px solid #2aa889; }' + #10 +
+    'th.callout-warning { background: #fdf3e0; border-left: 4px solid #d99b28; }' + #10 +
+    'th.callout-error { background: #fdeaea; border-left: 4px solid #d64545; }' + #10 +
+    'th.callout-question { background: #fff3e6; border-left: 4px solid #e08a2e; }' + #10 +
+    'th.callout-success { background: #eaf7ea; border-left: 4px solid #3aa03a; }' + #10 +
+    'th.callout-example { background: #f3ecfb; border-left: 4px solid #8a5cd1; }' + #10 +
+    'th.callout-quote { background: #f1f1f1; border-left: 4px solid #999999; }' + #10 +
     'img { max-width: 100%; height: auto; }' + #10 +
     '.cover { text-align: center; margin: 1em 0; }' + #10 +
     '.image { text-align: center; margin: 1em 0; }' + #10 +
@@ -1312,7 +1325,12 @@ begin
   if Block is TParagraph then
   begin
     Inner := RenderInline(TParagraph(Block).Content);
-    Result := '<p' + TakeNoteBlockAttr + '>' + Inner + '</p>';
+    { Блок кода (FB2 <p style="pre">, см. STYLE_PRE): отдаём как HTML <pre> —
+      только он сохраняет пробелы и переводы строк (piWhiteSpace = 'pre'). }
+    if TParagraph(Block).Style = STYLE_PRE then
+      Result := '<pre>' + Inner + '</pre>'
+    else
+      Result := '<p' + TakeNoteBlockAttr + '>' + Inner + '</p>';
   end
   else if Block is TSubtitle then
   begin
@@ -1456,12 +1474,25 @@ end;
 
 function TFb2ToHtmlConverter.RenderTable(Table: TTable): UnicodeString;
 var
-  Rows, Cells: UnicodeString;
+  Rows, Cells, Open, Cls: UnicodeString;
+  Callout: Boolean;
   I, J: Integer;
   Row: TTableRow;
   Cell: TTableCell;
   Tag, Attrs: UnicodeString;
 begin
+  { Таблица-выноска (Markdown-callout) помечается стилем «callout
+    callout-<тип>»: таблица получает class="callout", ячейка заголовка —
+    class="callout-<тип>", по которому CSS красит строку заголовка. }
+  Callout := LowerCase(Copy(Table.Style, 1, 7)) = 'callout';
+  Cls := '';
+  if Callout then
+  begin
+    Open := '<table class="callout">';
+    Cls := Trim(Copy(Table.Style, 8, MaxInt));
+  end
+  else
+    Open := '<table>';
   Rows := '';
   for I := 0 to Table.Rows.Count - 1 do
   begin
@@ -1479,12 +1510,14 @@ begin
         Attrs := Attrs + ' colspan="' + IntToStr(Cell.Colspan) + '"';
       if Cell.Rowspan <> NO_VALUE then
         Attrs := Attrs + ' rowspan="' + IntToStr(Cell.Rowspan) + '"';
+      if Cell.IsHeader and (Cls <> '') then
+        Attrs := Attrs + ' class="' + HtmlEscape(Cls, True) + '"';
       Cells := Cells + '<' + Tag + Attrs + '>' +
         RenderInline(Cell.Children) + '</' + Tag + '>';
     end;
     Rows := Rows + '<tr>' + Cells + '</tr>';
   end;
-  Result := '<table>' + Rows + '</table>';
+  Result := Open + Rows + '</table>';
 end;
 
 { ===================== Inline-разметка ===================== }

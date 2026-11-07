@@ -58,6 +58,11 @@ const
   NS_XLINK = 'http://www.w3.org/1999/xlink';
   NS_XML   = 'http://www.w3.org/XML/1998/namespace';
 
+  { Имя стиля абзаца для блока кода: <p style="pre">. Так конвертеры
+    размечают код (Markdown — fenced-блоки, HTML — <pre>), а fb2_html отдаёт
+    такой абзац как HTML <pre>: движок сохраняет пробелы и переводы строк. }
+  STYLE_PRE = 'pre';
+
   { Тег-заглушка для текстовых фрагментов внутри mixed-контента
     (в Python — TEXT_NODE). }
   TEXT_NODE_NAME = '#text';

@@ -37,10 +37,19 @@ interface
 
 uses
   Classes, SysUtils, Controls, ComCtrls, Dialogs, PrintersDlgs,
-  MetaFilePrinter,
+  MetaFilePrinter, HtmlView,
   fb2viewer;
 
 type
+  { В LCL свойство TControl.ParentFont объявлено ПРОТЕКТЕД, а разные версии
+    HtmlViewer то публикуют его (старые сборки FrameViewer09), то нет. Наследник
+    даёт доступ к свойству в любой версии; сам объект остаётся THtmlViewer —
+    используется только приведение типа, экземпляр не создаётся. }
+  TFb2HtmlViewerAccess = class(THtmlViewer)
+  public
+    procedure MakeFontOwn;
+  end;
+
   { Команды панели читалки. Кнопки создаются по набору Commands. }
   TFb2ToolbarCommand = (
     tcBack,        { назад по истории }
@@ -156,7 +165,7 @@ type
 implementation
 
 uses
-  Graphics, Forms, LCLType, HtmlGlobals, HtmlView, vwPrint;
+  Graphics, Forms, LCLType, HtmlGlobals, vwPrint;
 
 { ===================== Создание и настройка ===================== }
 
@@ -337,6 +346,12 @@ begin
     FOnStateChange(Self);
 end;
 
+procedure TFb2HtmlViewerAccess.MakeFontOwn;
+begin
+  { ParentFont — protected в TControl (LCL); внутри наследника доступно. }
+  ParentFont := False;
+end;
+
 procedure TFb2ViewerToolbar.ApplyFontSize;
 var
   SavePos: Integer;
@@ -344,7 +359,7 @@ begin
   if (FViewer = nil) or (FFontSize <= 0) then
     Exit;
   SavePos := FViewer.Viewer.Position;      { запомнить позицию чтения }
-  FViewer.Viewer.ParentFont := False;
+  TFb2HtmlViewerAccess(FViewer.Viewer).MakeFontOwn;
   FViewer.Viewer.DefFontSize := FFontSize;
   FViewer.Viewer.Font.Size := FFontSize;
   FViewer.ReRender;                        { перерисовать с новым шрифтом }

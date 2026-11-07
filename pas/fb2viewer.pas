@@ -19,6 +19,20 @@ unit fb2viewer;
     * LoadFromStream — временный каталог НЕ используется: HTML держится в
       памяти, а картинки отдаются из binary через OnImageRequest.
 
+  Архивы .fb2.zip: LoadFromFile (и свойство FileName) распознаёт ZIP по
+  расширению и открывает книгу БЕЗ временного каталога — распаковывается
+  только запись с FB2 (в память), режим загрузки при этом потоковый.
+  FileName при этом остаётся путём к архиву: по нему работают JSON-сессия
+  чтения и слежение дерева файлов (TFb2FileTreeView). Запись внутри архива
+  выбирается автоматически, а свойством ZipEntry её можно задать явно
+  (нужно для многокнижных архивов).
+
+  Другие форматы: LoadFromFile (и FileName) открывает также EPUB (.epub),
+  Markdown (.md/.markdown) и DOCX (.docx). Книга конвертируется в FB2 в памяти
+  (epub_to_fb2 / markdown_to_fb2 / docx_to_fb2) и показывается обычным
+  потоковым путём — с оглавлением, сносками и картинками из <binary>;
+  временный каталог не создаётся, FileName остаётся путём к исходному файлу.
+
   Навигация: GoToAnchor('sec-3') прокручивает к заголовку — прямая установка
   VScrollBarPosition по AnchorPosition (без перезагрузки документа); если якоря
   нет в разобранном документе, используется перезагрузка строки с '#anchor'.
@@ -41,6 +55,9 @@ uses
   Classes, SysUtils, Forms, Controls, ExtCtrls, LCLIntf, FileUtil, LazUTF8,
   fpjson,                                  { JSON-сессия чтения }
   fb2_structures, fb2_parser, fb2_html,   { наш порт — без GUI }
+  fb2_archive,                             { чтение .fb2.zip (paszlib) }
+  epub_to_fb2, markdown_to_fb2,            { EPUB/Markdown -> FB2 в памяти }
+  docx_to_fb2,                             { DOCX -> FB2 в памяти }
   HtmlGlobals, HtmlView, HTMLUn2;          { HtmlViewer 11: движок + TIDObject }
 
 type
@@ -73,6 +90,9 @@ type
     FDocumentSerial: Integer;      { номер документа: растёт при каждой загрузке }
     FHtml: UnicodeString;
     FHtmlPath: UnicodeString;
+    FStreamSource: Boolean;        { HTML/картинки в памяти (поток или .fb2.zip) }
+    FZipEntry: UnicodeString;      { запись внутри архива ('' — авто) }
+    FLoadedZipEntry: UnicodeString; { запись, из которой загружена книга }
     FOnDocumentLoad: TNotifyEvent;
     FOnLoadProgress: TFb2LoadProgressEvent;
     FProcessMessagesOnLoad: Boolean;
@@ -99,6 +119,16 @@ type
 
     function NewTempDir: UnicodeString;
     procedure ClearTempDir;
+    { Ядро потоковой загрузки. AFileName — путь-источник для свойства FileName:
+      '' (публичный LoadFromStream) или путь к .fb2.zip (LoadFromZip); книга
+      при этом читается из AStream, временный каталог не создаётся. }
+    procedure LoadStream(AStream: TStream; const AFileName: TFileName);
+    { Поток с байтами книги из архива .fb2.zip (распаковывается только запись
+      с FB2; остальные книги многокнижного архива не читаются). }
+    function LoadZipBook(const AZipFile: TFileName): TMemoryStream;
+    { Показать FB2-XML, полученный конвертером (EPUB/Markdown): грузится
+      потоковым путём, FileName — исходный файл (.epub/.md). }
+    procedure LoadFb2Xml(const AFileName: TFileName; const AXml: UnicodeString);
     procedure SetFileName(const Value: TFileName);
     procedure SetCss(const Value: UnicodeString);
     procedure SetCssFile(const Value: TFileName);
@@ -131,6 +161,19 @@ type
     { То же, но источник — поток: временный каталог не используется, картинки
       отдаются из памяти через OnImageRequest. }
     procedure LoadFromStream(AStream: TStream);
+    { Открыть «однокнижный» архив (.fb2.zip): запись с FB2 распаковывается в
+      память и грузится как поток (временный каталог не нужен), FileName
+      остаётся путём к архиву. Какая запись выбрана — ZipEntryName. }
+    procedure LoadFromZip(const AZipFile: TFileName);
+    { Открыть EPUB: книга конвертируется в FB2 в памяти (epub_to_fb2) и
+      показывается потоковым путём; FileName остаётся путём к .epub. }
+    procedure LoadFromEpub(const AFileName: TFileName);
+    { Открыть Markdown (.md/.markdown): конвертируется в FB2 в памяти
+      (markdown_to_fb2) и показывается потоковым путём. }
+    procedure LoadFromMarkdown(const AFileName: TFileName);
+    { Открыть DOCX: конвертируется в FB2 в памяти (docx_to_fb2) и показывается
+      потоковым путём; FileName остаётся путём к .docx. }
+    procedure LoadFromDocx(const AFileName: TFileName);
     procedure Reload;
     { Перерисовать текущий документ без повторного разбора FB2: нужно после
       смены настроек рендеринга (например, размера шрифта). Сохраняет режим
@@ -205,6 +248,9 @@ type
     property Viewer: THtmlViewer read FViewer;
     { Конвертер последнего документа (Bodies, TocEntries, Binaries, NoteTargets). }
     property Converter: TFb2ToHtmlConverter read FConverter;
+    { Запись .fb2.zip, из которой загружена текущая книга ('' — книга не из
+      архива). }
+    property ZipEntryName: UnicodeString read FLoadedZipEntry;
     { Номер текущего документа: увеличивается при каждой загрузке (в том числе
       при Reload). Подписчики (TFb2Outline и т. п.) по нему отличают новый
       документ от повторного события о том же. Сравнивать указатель Converter
@@ -218,6 +264,11 @@ type
     property Align;
     property Anchors;
     property FileName: TFileName read FFileName write SetFileName;
+    { Запись внутри архива .fb2.zip: полное имя или только базовое. Пусто
+      (по умолчанию) — выбрать автоматически: запись, совпадающую с именем
+      архива без '.zip', иначе первую '.fb2', иначе единственную запись.
+      Нужно для многокнижных архивов; на обычные файлы .fb2 не влияет. }
+    property ZipEntry: UnicodeString read FZipEntry write FZipEntry;
     property ImageDir: UnicodeString read FImageDir write FImageDir;
     property HeadingOffset: Integer read FHeadingOffset write FHeadingOffset default 1;
     property MaxHeadingLevel: Integer read FMaxHeadingLevel write FMaxHeadingLevel default 6;
@@ -250,7 +301,61 @@ type
       write FProcessMessagesOnLoad default False;
   end;
 
+{ ===================== Поддерживаемые форматы ===================== }
+
+{ Расширение файла в нижнем регистре ('' — расширения нет). }
+function FileExtOf(const FileName: TFileName): string;
+
+{ Файл — EPUB (по расширению): конвертируется в FB2 в памяти. }
+function IsEpubFile(const FileName: TFileName): Boolean;
+
+{ Файл — Markdown (по расширению .md/.markdown). }
+function IsMarkdownFile(const FileName: TFileName): Boolean;
+
+{ Файл — DOCX (по расширению): конвертируется в FB2 в памяти. }
+function IsDocxFile(const FileName: TFileName): Boolean;
+
+{ Файл открывается читалкой: .fb2, ZIP-архив (.fb2.zip/.zip), .epub,
+  .md/.markdown или .docx. Удобно для фильтров в диалогах открытия. }
+function IsViewableBookFile(const FileName: TFileName): Boolean;
+
 implementation
+
+{ ===================== Поддерживаемые форматы ===================== }
+
+function FileExtOf(const FileName: TFileName): string;
+begin
+  { TFileName — строка LCL (UTF-8), но расширение всегда ASCII, поэтому
+    ExtractFileExt по байтам безопасен и для кириллических путей. }
+  Result := LowerCase(ExtractFileExt(FileName));
+end;
+
+function IsEpubFile(const FileName: TFileName): Boolean;
+begin
+  Result := FileExtOf(FileName) = '.epub';
+end;
+
+function IsMarkdownFile(const FileName: TFileName): Boolean;
+var
+  Ext: string;
+begin
+  Ext := FileExtOf(FileName);
+  Result := (Ext = '.md') or (Ext = '.markdown');
+end;
+
+function IsDocxFile(const FileName: TFileName): Boolean;
+begin
+  Result := FileExtOf(FileName) = '.docx';
+end;
+
+function IsViewableBookFile(const FileName: TFileName): Boolean;
+var
+  Ext: string;
+begin
+  Ext := FileExtOf(FileName);
+  Result := (Ext = '.fb2') or (Ext = '.zip') or (Ext = '.epub') or
+    (Ext = '.md') or (Ext = '.markdown') or (Ext = '.docx');
+end;
 
 type
   { Указатель на подписчика (для списков FDocLoadListeners/FScrollListeners). }
@@ -489,6 +594,9 @@ begin
   FIncludeCover := True;
   FNoteLinks := True;
   FImageDir := 'images';
+  FStreamSource := False;       { по умолчанию — файловый режим (temp-каталог) }
+  FZipEntry := '';
+  FLoadedZipEntry := '';
 
   FViewer := THtmlViewer.Create(Self);
   FViewer.Parent := Self;
@@ -652,7 +760,11 @@ begin
   if (Range > 0) and (Pos > Range) then
     Pos := Range;
   if (Range > 0) and (Pos >= 0) then
-    Percent := Pos * 100 div Range
+    { Int64 обязателен: у очень длинных книг (большой шрифт + тысячи глав)
+      высота документа превышает 21 млн px, и Pos * 100 в 32 битах
+      переполняется — при -Cr/-Co это ERangeError, без проверок — тихо
+      неверный процент. }
+    Percent := Integer(Int64(Pos) * 100 div Range)
   else
     Percent := 0;
 
@@ -809,10 +921,10 @@ begin
   if Target < 0 then
   begin
     if (FPendingScrollRange > 0) and
-       (Abs(CurRange - FPendingScrollRange) <= FPendingScrollRange div 5) then
+       (Abs(Int64(CurRange) - FPendingScrollRange) <= FPendingScrollRange div 5) then
       Target := FPendingScrollPos
     else if FPendingScrollPercent > 0 then
-      Target := CurRange * FPendingScrollPercent div 100
+      Target := Integer(Int64(CurRange) * FPendingScrollPercent div 100)
     else
       Target := FPendingScrollPos;
   end;
@@ -992,6 +1104,33 @@ end;
 
 procedure TFb2Viewer.LoadFromFile(const AFileName: TFileName);
 begin
+  { EPUB и Markdown: конвертируем в FB2 в памяти и показываем как книгу.
+    FileName останется путём к исходному файлу. }
+  if IsEpubFile(AFileName) then
+  begin
+    LoadFromEpub(AFileName);
+    Exit;
+  end;
+  if IsMarkdownFile(AFileName) then
+  begin
+    LoadFromMarkdown(AFileName);
+    Exit;
+  end;
+  if IsDocxFile(AFileName) then
+  begin
+    LoadFromDocx(AFileName);
+    Exit;
+  end;
+
+  { Архив .fb2.zip: книгу читаем из памяти, временный каталог не нужен.
+    FileName остаётся путём к архиву — сессия чтения и дерево файлов
+    работают с ним так же, как с обычным .fb2. }
+  if IsZipArchive(UnicodeString(AFileName)) then
+  begin
+    LoadFromZip(AFileName);
+    Exit;
+  end;
+
   { Имя файла приходит в кодировке LCL (UTF-8), а RTL/конвертер работают с
     системной кодировкой — конвертируем явно, иначе кириллические пути
     («книга.fb2») не откроются. }
@@ -1009,6 +1148,8 @@ begin
   ClearTempDir;
   FTempDir := NewTempDir;
   FFileName := AFileName;
+  FStreamSource := False;        { HTML и картинки — на диске (temp-каталог) }
+  FLoadedZipEntry := '';
   FNoteBackPos.Clear;
 
   FLoading := True;
@@ -1057,7 +1198,18 @@ end;
 
 procedure TFb2Viewer.LoadFromStream(AStream: TStream);
 begin
-  { Без временного каталога: HTML держим в памяти, картинки — из binary. }
+  { Публичный вход: источник — поток, пути у документа нет. }
+  FLoadedZipEntry := '';
+  LoadStream(AStream, '');
+end;
+
+procedure TFb2Viewer.LoadStream(AStream: TStream;
+  const AFileName: TFileName);
+begin
+  { Без временного каталога: HTML держим в памяти, картинки — из binary.
+    AFileName — путь-источник для свойства FileName: '' (LoadFromStream) или
+    путь к .fb2.zip (LoadFromZip); по нему работают сессия чтения и дерево
+    файлов. }
   if FLoading then
     Exit;
 
@@ -1067,7 +1219,8 @@ begin
 
   ClearTempDir;
   FTempDir := '';
-  FFileName := '';
+  FFileName := AFileName;
+  FStreamSource := True;          { HTML и картинки — в памяти }
   FHtmlPath := '';
   FNoteBackPos.Clear;
 
@@ -1104,6 +1257,132 @@ begin
   end;
 
   NotifyDocumentLoad;
+end;
+
+function TFb2Viewer.LoadZipBook(const AZipFile: TFileName): TMemoryStream;
+var
+  Data: TBytes;
+  EntryName: UnicodeString;
+begin
+  { Читается только запись с книгой: многокнижный архив не распаковывается
+    целиком. Запись — ZipEntry, если задана, иначе выбор автоматический. }
+  Data := ReadFb2FromZip(UnicodeString(AZipFile), FZipEntry, EntryName);
+  FLoadedZipEntry := EntryName;
+  Result := TMemoryStream.Create;
+  try
+    if Length(Data) > 0 then
+      Result.WriteBuffer(Data[0], Length(Data));
+    Result.Position := 0;
+  except
+    Result.Free;
+    raise;
+  end;
+end;
+
+procedure TFb2Viewer.LoadFromZip(const AZipFile: TFileName);
+var
+  Book: TMemoryStream;
+begin
+  if FLoading then
+    Exit;
+  if not FileExists(UTF8ToSys(AZipFile)) then
+    raise Exception.CreateFmt('Архив не найден: %s', [AZipFile]);
+
+  { Книга распаковывается в память, режим загрузки — потоковый (временного
+    каталога нет), а FileName указывает на архив. }
+  Book := LoadZipBook(AZipFile);
+  try
+    LoadStream(Book, AZipFile);
+  finally
+    Book.Free;
+  end;
+end;
+
+procedure TFb2Viewer.LoadFb2Xml(const AFileName: TFileName;
+  const AXml: UnicodeString);
+var
+  Book: TMemoryStream;
+  XmlText: UTF8String;
+begin
+  { XML от конвертера грузим сразу из памяти: временный каталог не нужен,
+    картинки лежат в <binary> и отдаются через OnImageRequest. }
+  XmlText := UTF8Encode(AXml);
+  Book := TMemoryStream.Create;
+  try
+    if Length(XmlText) > 0 then
+      Book.WriteBuffer(XmlText[1], Length(XmlText));
+    Book.Position := 0;
+    FLoadedZipEntry := '';         { книга не из архива }
+    LoadStream(Book, AFileName);
+  finally
+    Book.Free;
+  end;
+end;
+
+procedure TFb2Viewer.LoadFromEpub(const AFileName: TFileName);
+var
+  EpubConv: TEpubToFb2Converter;
+  Xml: UnicodeString;
+begin
+  if FLoading then
+    Exit;
+  if not FileExists(UTF8ToSys(AFileName)) then
+    raise Exception.CreateFmt('EPUB не найден: %s', [AFileName]);
+
+  { EPUB -> структуры FB2 -> XML в памяти; дальше работает обычный конвейер
+    (оглавление, сноски, картинки из <binary>), см. LoadFb2Xml. }
+  EpubConv := TEpubToFb2Converter.Create;
+  try
+    EpubConv.Convert(UnicodeString(AFileName));
+    Xml := EpubConv.ToXml;
+  finally
+    EpubConv.Free;
+  end;
+  LoadFb2Xml(AFileName, Xml);
+end;
+
+procedure TFb2Viewer.LoadFromMarkdown(const AFileName: TFileName);
+var
+  MdConv: TMarkdownToFb2Converter;
+  Xml: UnicodeString;
+begin
+  if FLoading then
+    Exit;
+  if not FileExists(UTF8ToSys(AFileName)) then
+    raise Exception.CreateFmt('Markdown не найден: %s', [AFileName]);
+
+  { Markdown -> структуры FB2 -> XML в памяти (заголовки, списки, таблицы,
+    картинки рядом с файлом) — дальше LoadFb2Xml. }
+  MdConv := TMarkdownToFb2Converter.Create(UnicodeString(AFileName));
+  try
+    MdConv.Convert;
+    Xml := MdConv.ToXml;
+  finally
+    MdConv.Free;
+  end;
+  LoadFb2Xml(AFileName, Xml);
+end;
+
+procedure TFb2Viewer.LoadFromDocx(const AFileName: TFileName);
+var
+  DocxConv: TDocxToFb2Converter;
+  Xml: UnicodeString;
+begin
+  if FLoading then
+    Exit;
+  if not FileExists(UTF8ToSys(AFileName)) then
+    raise Exception.CreateFmt('DOCX не найден: %s', [AFileName]);
+
+  { DOCX -> структуры FB2 -> XML в памяти (заголовки стилями HeadingN,
+    таблицы, картинки из word/media) — дальше LoadFb2Xml. }
+  DocxConv := TDocxToFb2Converter.Create;
+  try
+    DocxConv.Convert(UnicodeString(AFileName));
+    Xml := DocxConv.ToXml;
+  finally
+    DocxConv.Free;
+  end;
+  LoadFb2Xml(AFileName, Xml);
 end;
 
 procedure TFb2Viewer.ViewerImageRequest(Sender: TObject; const SRC: ThtString;
@@ -1212,7 +1491,7 @@ begin
     Exit;
   if FHtml = '' then
     Exit;
-  if FFileName <> '' then
+  if not FStreamSource then
   begin
     { Файловый режим: картинки лежат на диске, база — путь к book.html. }
     FViewer.OnImageRequest := nil;
@@ -1220,7 +1499,8 @@ begin
   end
   else
   begin
-    { Потоковый режим: картинки отдаются из памяти через OnImageRequest. }
+    { Потоковый режим (в том числе книга из .fb2.zip): картинки отдаются из
+      памяти через OnImageRequest. }
     FViewer.OnImageRequest := @ViewerImageRequest;
     FViewer.LoadFromString(FHtml, '');
   end;

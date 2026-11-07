@@ -2,10 +2,11 @@ unit fb2filelistview;
 { Список файлов каталога, показывающий только FB2-файлы.
 
   Наследник TShellListView (unit ShellCtrls, входит в LCL): показывает файлы
-  текущего каталога, подходящие под маску Mask (по умолчанию '*.fb2';
-  несколько шаблонов — через ';'). Парный компонент к TFb2FileTreeView:
-  связав их свойством ShellTreeView, получите «дерево + список» (список
-  следует за выделением в дереве).
+  текущего каталога, подходящие под маску Mask (по умолчанию
+  DefaultBookFileMask = '*.fb2;*.fb2.zip;*.epub;*.md;*.markdown;*.docx' — всё,
+  что открывает читалка; несколько шаблонов — через ';'). Парный компонент к
+  TFb2FileTreeView: связав их свойством ShellTreeView, получите
+  «дерево + список» (список следует за выделением в дереве).
 
   Каталог, содержимое которого показывается, задаётся свойством Path
   (синоним унаследованного Root) — так же, как у TFb2FileTreeView.
@@ -29,6 +30,14 @@ interface
 
 uses
   Classes, SysUtils, ComCtrls, ShellCtrls, LazFileUtils;
+
+const
+  { Маска по умолчанию: всё, что открывает читалка TFb2Viewer (та же, что у
+    TFb2FileTreeView) — FB2, архивы .fb2.zip, EPUB, Markdown и DOCX. }
+  DefaultBookFileMask = '*.fb2;*.fb2.zip;*.epub;*.md;*.markdown;*.docx';
+
+  { Только FB2 (файлы и «однокнижные» архивы). }
+  DefaultFb2FileMask = '*.fb2;*.fb2.zip';
 
 type
   { Список файлов каталога с фильтром по маске (по умолчанию — только FB2). }
@@ -55,8 +64,8 @@ constructor TFb2FileListView.Create(AOwner: TComponent);
 begin
   inherited Create(AOwner);
   { TShellListView по умолчанию показывает ВСЕ файлы (Mask = '') — фильтруем
-    так же, как TFb2FileTreeView. }
-  Mask := '*.fb2';
+    так же, как TFb2FileTreeView (fb2, .fb2.zip, epub, markdown). }
+  Mask := DefaultBookFileMask;
 end;
 
 function TFb2FileListView.GetPath: string;

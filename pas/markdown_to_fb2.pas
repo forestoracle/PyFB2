@@ -12,6 +12,15 @@ unit markdown_to_fb2;
       * **жирный**, *курсив*, ~~зачёркнутый~~, `код`, <sub>/<sup>,
         [текст](url) -> inline-разметка;
       * | … | -> <table>, строки с двумя пробелами в конце -> стихи;
+      * блоки кода в заборах ``` или ~~~ (GFM) -> <p style="pre"> — fb2_html
+        отдаёт их как HTML <pre> (пробелы и переводы строк сохраняются);
+      * callout'ы Obsidian ('> [!NOTE] Заголовок' + строки цитаты) -> <table>
+        из одной колонки и двух строк: <th><strong>заголовок</strong></th> и
+        <td>текст</td>; понимаются все типы Obsidian (note, tip/hint/important,
+        warning/caution/attention, error/danger/failure/fail, question/help/faq,
+        success/check/done, example, quote/cite) — без своего заголовка
+        подставляется название типа, а тип пишется в style таблицы
+        («callout callout-warning»), чтобы fb2_html покрасил заголовок;
       * изображения из файлов -> <binary> (base64).
 
   Пример:
@@ -73,6 +82,8 @@ type
     function ParseBlocks(Lines: TTextList): TFb2ObjectList;
     function CollectTable(Lines: TTextList; Start: Integer): TTextList;
     function ParseTable(Lines: TTextList): TTable;
+    function MakeCalloutTable(const Kind, Title,
+      BodyText: UnicodeString): TTable;
     function IsSeparator(Cells: TTextList): Boolean;
     function CollectPoem(Lines: TTextList; Start: Integer): TTextList;
     function ParsePoem(Lines: TTextList): TPoem;
@@ -265,6 +276,158 @@ begin
   Result := (N >= 2) and (S[N] = ' ') and (S[N - 1] = ' ');
 end;
 
+{ Маркер Obsidian-callout: '[!NOTE] Заголовок' -> Kind='NOTE',
+  Title='Заголовок'. Возвращает False, если строка — не маркер. }
+function ParseCalloutMarker(const Text: UnicodeString; out Kind: UnicodeString;
+  out Title: UnicodeString): Boolean;
+var
+  I, N: Integer;
+begin
+  Result := False;
+  Kind := '';
+  Title := '';
+  N := Length(Text);
+  if (N < 4) or (Text[1] <> '[') or (Text[2] <> '!') then
+    Exit;
+  I := 3;
+  while (I <= N) and (Text[I] <> ']') and (Text[I] <> ' ') and
+    (Text[I] <> #9) do
+  begin
+    Kind := Kind + Text[I];
+    Inc(I);
+  end;
+  if (Kind = '') or (I > N) or (Text[I] <> ']') then
+    Exit;
+  Title := Trim(Copy(Text, I + 1, MaxInt));
+  Result := True;
+end;
+
+{ Человеческое название callout'а и группа оформления.
+
+  Названия типов нечувствительны к регистру; синонимы Obsidian сведены к
+  одной группе, чтобы в HTML у них был один цвет:
+    note/info/abstract/summary/todo          -> callout-note     (синий)
+    tip/hint/important                       -> callout-tip      (бирюзовый)
+    warning/caution/attention                -> callout-warning  (жёлтый)
+    error/danger/failure/fail/bug            -> callout-error    (красный)
+    question/help/faq                        -> callout-question (оранжевый)
+    success/check/done                       -> callout-success  (зелёный)
+    example                                  -> callout-example  (сиреневый)
+    quote/cite                               -> callout-quote    (серый)
+
+  Неизвестный тип получает заголовок с заглавной буквы и группу note. }
+procedure CalloutTypeInfo(const Kind: UnicodeString; out Title: UnicodeString;
+  out Group: UnicodeString);
+var
+  Key: UnicodeString;
+begin
+  Key := WideLowerCase(Kind);
+  Title := 'Примечание';
+  Group := 'note';
+  if (Key = '') or (Key = 'note') then
+    Exit;
+  if Key = 'info' then
+    Title := 'Информация'
+  else if Key = 'abstract' then
+    Title := 'Кратко'
+  else if Key = 'summary' then
+    Title := 'Итог'
+  else if Key = 'todo' then
+    Title := 'Сделать'
+  else if Key = 'tip' then
+  begin
+    Title := 'Совет';
+    Group := 'tip';
+  end
+  else if Key = 'hint' then
+  begin
+    Title := 'Подсказка';
+    Group := 'tip';
+  end
+  else if Key = 'important' then
+  begin
+    Title := 'Важно';
+    Group := 'tip';
+  end
+  else if Key = 'warning' then
+  begin
+    Title := 'Предупреждение';
+    Group := 'warning';
+  end
+  else if Key = 'caution' then
+  begin
+    Title := 'Осторожно';
+    Group := 'warning';
+  end
+  else if Key = 'attention' then
+  begin
+    Title := 'Внимание';
+    Group := 'warning';
+  end
+  else if Key = 'error' then
+  begin
+    Title := 'Ошибка';
+    Group := 'error';
+  end
+  else if Key = 'bug' then
+  begin
+    Title := 'Ошибка';
+    Group := 'error';
+  end
+  else if Key = 'danger' then
+  begin
+    Title := 'Опасно';
+    Group := 'error';
+  end
+  else if (Key = 'failure') or (Key = 'fail') then
+  begin
+    Title := 'Провал';
+    Group := 'error';
+  end
+  else if Key = 'question' then
+  begin
+    Title := 'Вопрос';
+    Group := 'question';
+  end
+  else if Key = 'help' then
+  begin
+    Title := 'Справка';
+    Group := 'question';
+  end
+  else if Key = 'faq' then
+  begin
+    Title := 'Вопросы и ответы';
+    Group := 'question';
+  end
+  else if Key = 'success' then
+  begin
+    Title := 'Успех';
+    Group := 'success';
+  end
+  else if Key = 'check' then
+  begin
+    Title := 'Готово';
+    Group := 'success';
+  end
+  else if Key = 'done' then
+  begin
+    Title := 'Выполнено';
+    Group := 'success';
+  end
+  else if Key = 'example' then
+  begin
+    Title := 'Пример';
+    Group := 'example';
+  end
+  else if (Key = 'quote') or (Key = 'cite') then
+  begin
+    Title := 'Цитата';
+    Group := 'quote';
+  end
+  else
+    Title := WideUpperCase(Copy(Kind, 1, 1)) + Copy(Kind, 2, MaxInt);
+end;
+
 { Разобрать заголовок ``#{1,6}\s+...``. }
 function MatchHeading(const Line: UnicodeString; out Level: Integer;
   out Rest: UnicodeString): Boolean;
@@ -427,6 +590,81 @@ begin
   end;
 end;
 
+{ ===================== Блоки кода (fenced) ===================== }
+
+{ Начало блока кода: ``` или ~~~ (три и более одинаковых символа), возможно с
+  отступом. FenceChar — символ забора, FenceLen — их количество, Indent —
+  отступ строки забора. Info-string после забора (```pascal) игнорируется. }
+function FenceStart(const Line: UnicodeString; out FenceChar: WideChar;
+  out FenceLen, Indent: Integer): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  FenceChar := #0;
+  FenceLen := 0;
+  Indent := 0;
+  while (Indent < Length(Line)) and (Line[Indent + 1] = ' ') do
+    Inc(Indent);
+  if Indent >= Length(Line) then
+    Exit;
+  if (Line[Indent + 1] <> '`') and (Line[Indent + 1] <> '~') then
+    Exit;
+  FenceChar := Line[Indent + 1];
+  I := Indent + 1;
+  while (I <= Length(Line)) and (Line[I] = FenceChar) do
+    Inc(I);
+  FenceLen := I - Indent - 1;
+  Result := FenceLen >= 3;
+end;
+
+{ Закрывающий забор: те же символы (не меньше, чем в открывающем) и больше
+  ничего, кроме пробелов. }
+function FenceEnd(const Line: UnicodeString; FenceChar: WideChar;
+  FenceLen: Integer): Boolean;
+var
+  S: UnicodeString;
+  I, Count: Integer;
+begin
+  S := Trim(Line);
+  Count := 0;
+  I := 1;
+  while (I <= Length(S)) and (S[I] = FenceChar) do
+  begin
+    Inc(Count);
+    Inc(I);
+  end;
+  Result := (Count >= FenceLen) and (Trim(Copy(S, I, MaxInt)) = '');
+end;
+
+{ Строки блока кода: от Start + 1 до закрывающего забора (или до конца
+  файла). NextIndex — строка, с которой продолжается разбор. Отступ забора
+  снимается с каждой строки (как в GFM). }
+function CollectCodeLines(Lines: TTextList; Start, FenceLen, Indent: Integer;
+  FenceChar: WideChar; out NextIndex: Integer): TTextList;
+var
+  J, K: Integer;
+  Line: UnicodeString;
+begin
+  Result := TTextList.Create;
+  J := Start + 1;
+  while J < Lines.Count do
+  begin
+    Line := Lines[J];
+    if FenceEnd(Line, FenceChar, FenceLen) then
+    begin
+      Inc(J);
+      Break;
+    end;
+    K := 0;
+    while (K < Indent) and (K < Length(Line)) and (Line[K + 1] = ' ') do
+      Inc(K);
+    Result.Add(Copy(Line, K + 1, MaxInt));
+    Inc(J);
+  end;
+  NextIndex := J;
+end;
+
 function TMarkdownToFb2Converter.ParseMarkdown(const Text: UnicodeString): TFictionBook;
 var
   Lines: TTextList;
@@ -440,6 +678,10 @@ var
   Line, Stripped, MetaKey, MetaValue, Alt, Src, Href: UnicodeString;
   HeadingText, Inner, Nodes: TFb2ObjectList;
   BlockLines, TableLines, PoemLines: TTextList;
+  FenceChar: WideChar;
+  FenceLen, FenceIndent, NextIdx: Integer;
+  CodeText: UnicodeString;
+  CalloutKind, CalloutTitle, BodyText: UnicodeString;
   Table: TTable;
   Poem: TPoem;
   Cite: TCite;
@@ -543,10 +785,55 @@ begin
         Continue;
       end;
 
+      { Блок кода в заборе ``` или ~~~ (GFM): строки сохраняем как есть и
+        отдаём одним абзацем со стилем pre (fb2_html -> <pre>). }
+      if FenceStart(Line, FenceChar, FenceLen, FenceIndent) then
+      begin
+        BlockLines := CollectCodeLines(Lines, I, FenceLen, FenceIndent,
+          FenceChar, NextIdx);
+        CodeText := '';
+        for J := 0 to BlockLines.Count - 1 do
+        begin
+          if J > 0 then
+            CodeText := CodeText + #10;
+          CodeText := CodeText + BlockLines[J];
+        end;
+        BlockLines.Free;
+        P := TParagraph.Create;
+        FreeAndNil(P.Content);
+        P.Style := STYLE_PRE;
+        P.Content := TFb2ObjectList.Create;
+        if CodeText <> '' then
+          P.Content.Add(TStyleNode.Create(TEXT_NODE_NAME, CodeText));
+        Stack[StackLen - 1].Sec.Content.Add(P);
+        I := NextIdx;
+        Continue;
+      end;
+
       if (Stripped <> '') and (Stripped[1] = '>') then
       begin
         BlockLines := CollectQuote(Lines, I);
         N := BlockLines.Count;
+        { Obsidian-callout: '> [!NOTE] Заголовок' + строки текста ->
+          таблица 1x2: строка-заголовок (жирным) и строка-содержимое. }
+        if (N > 0) and ParseCalloutMarker(BlockLines[0], CalloutKind,
+          CalloutTitle) then
+        begin
+          BodyText := '';
+          for J := 1 to N - 1 do
+          begin
+            if BlockLines[J] = '' then
+              Continue;
+            if BodyText <> '' then
+              BodyText := BodyText + ' ';
+            BodyText := BodyText + BlockLines[J];
+          end;
+          BlockLines.Free;
+          Stack[StackLen - 1].Sec.Content.Add(
+            MakeCalloutTable(CalloutKind, CalloutTitle, BodyText));
+          Inc(I, N);
+          Continue;
+        end;
         Inner := ParseBlocks(BlockLines);
         BlockLines.Free;
         if (Root.Sections.Count = 0) and (AnnotationItems.Count = 0) then
@@ -877,6 +1164,51 @@ begin
   end;
 end;
 
+{ Оформить Obsidian-callout ('> [!NOTE] Заголовок' + строки текста) как
+  таблицу 1x2: первая строка — заголовок (th + strong, т.е. жирный),
+  вторая — содержимое (td). В ячейках td/th по FB2 допустима только
+  inline-разметка, поэтому строки текста склеены через пробел.
+
+  Тип выноски сохраняется в атрибуте style таблицы («callout callout-note»,
+  «callout callout-warning», ...) — fb2_html превращает его в CSS-классы и
+  красит заголовок в цвет типа. }
+function TMarkdownToFb2Converter.MakeCalloutTable(const Kind, Title,
+  BodyText: UnicodeString): TTable;
+var
+  Row: TTableRow;
+  Cell: TTableCell;
+  Header: TStyleNode;
+  Caption, Group: UnicodeString;
+begin
+  CalloutTypeInfo(Kind, Caption, Group);
+  if Title <> '' then
+    Caption := Title;
+
+  Result := TTable.Create;
+  Result.Style := 'callout callout-' + Group;
+
+  { строка 1: заголовок — <th><strong>...</strong></th> }
+  Row := TTableRow.Create;
+  Cell := TTableCell.Create('th');
+  FreeAndNil(Cell.Children);
+  Cell.Children := TFb2ObjectList.Create;
+  Cell.IsHeader := True;
+  Header := TStyleNode.Create('strong');
+  FreeAndNil(Header.Children);
+  Header.Children := ParseInline(Caption);
+  Cell.Children.Add(Header);
+  Row.Cells.Add(Cell);
+  Result.Rows.Add(Row);
+
+  { строка 2: содержимое — <td>...</td> }
+  Row := TTableRow.Create;
+  Cell := TTableCell.Create('td');
+  FreeAndNil(Cell.Children);
+  Cell.Children := ParseInline(BodyText);
+  Row.Cells.Add(Cell);
+  Result.Rows.Add(Row);
+end;
+
 function TMarkdownToFb2Converter.ParseBlocks(Lines: TTextList): TFb2ObjectList;
 var
   Blocks: TFb2ObjectList;
@@ -886,6 +1218,10 @@ var
   Poem: TPoem;
   TLines, PLines: TTextList;
   P: TParagraph;
+  FenceChar: WideChar;
+  FenceLen, FenceIndent, NextIdx, J: Integer;
+  CodeLines: TTextList;
+  CodeText: UnicodeString;
 begin
   Blocks := TFb2ObjectList.Create;
   I := 0;
@@ -895,6 +1231,31 @@ begin
     if Stripped = '' then
     begin
       Inc(I);
+      Continue;
+    end;
+    { Блок кода в заборе ``` или ~~~ (GFM): собираем строки как есть и отдаём
+      одним абзацем со стилем pre — fb2_html превратит его в <pre>, который
+      сохраняет пробелы и переводы строк. }
+    if FenceStart(Lines[I], FenceChar, FenceLen, FenceIndent) then
+    begin
+      CodeLines := CollectCodeLines(Lines, I, FenceLen, FenceIndent, FenceChar,
+        NextIdx);
+      CodeText := '';
+      for J := 0 to CodeLines.Count - 1 do
+      begin
+        if J > 0 then
+          CodeText := CodeText + #10;
+        CodeText := CodeText + CodeLines[J];
+      end;
+      CodeLines.Free;
+      P := TParagraph.Create;
+      FreeAndNil(P.Content);
+      P.Style := STYLE_PRE;
+      P.Content := TFb2ObjectList.Create;
+      if CodeText <> '' then
+        P.Content.Add(TStyleNode.Create(TEXT_NODE_NAME, CodeText));
+      Blocks.Add(P);
+      I := NextIdx;
       Continue;
     end;
     if Stripped[1] = '|' then
